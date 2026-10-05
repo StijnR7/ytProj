@@ -16,10 +16,10 @@ from ..config import load_config, resolve
 from ..project import Project
 from ..tts import SR, ffmpeg_exe
 from .audio import build_mix, mouth_envelope
-from .common import ORANGE, ease_in_out_sine
+from .common import ORANGE, MotionAudit, drift_camera, ease_in_out_sine, light_sweep
 from .scenes import SceneContext, make_scene
 
-RENDER_VERSION = "4"
+RENDER_VERSION = "5"
 
 _IMG_CACHE: dict = {}
 
@@ -158,7 +158,7 @@ def _wipe(prev: Image.Image, cur: Image.Image, p: float) -> Image.Image:
     return out
 
 
-def render_scene(slug: str, idx: int, out_path: str, preview: bool = False) -> str:
+def render_scene(slug: str, idx: int, out_path: str, preview: bool = False, force_motion: bool = False) -> str:
     """Render one scene to an MP4 (worker process entry point)."""
     project = Project(slug)
     scenes = project.scenes()
@@ -192,21 +192,31 @@ def render_scene(slug: str, idx: int, out_path: str, preview: bool = False) -> s
         "-r", str(fps), "-i", "-", "-c:v", "libx264", "-preset", v["preset"], "-crf", str(v["crf"]),
         "-pix_fmt", "yuv420p", "-r", str(fps), "-video_track_timescale", str(fps * 1000), tmp,
     ]
+    audit = MotionAudit(fps)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
         for i in range(frames):
             t = i / fps
             f = scene.frame(t)
+            if force_motion:  # safety net: stronger camera drift + a travelling light, works on any picture
+                f = light_sweep(drift_camera(f, t, idx, strength=2.0), t)
             if prev_last is not None and t < trans:
                 p = t / trans
                 f = _wipe(prev_last, f, p) if kind == "title" else _whip(prev_last, f, p)
+            audit.add(f)
             proc.stdin.write(f.tobytes())
     finally:
         proc.stdin.close()
         rc = proc.wait()
     if rc != 0:
         raise RuntimeError(f"ffmpeg failed rendering scene {idx}")
+    limit = float(v.get("max_still_seconds", 2.5))
+    if audit.longest_seconds > limit and not force_motion:
+        # Hard rule: the screen is never still for more than ~3 seconds. Re-render this scene with forced motion.
+        os.remove(tmp)
+        return render_scene(slug, idx, out_path, preview, force_motion=True)
     os.replace(tmp, out_path)
+    Path(out_path + ".motion.json").write_text(json.dumps({"longest_still": round(audit.longest_seconds, 2), "forced": force_motion}))
     return out_path
 
 
@@ -240,7 +250,7 @@ def render_video(project: Project, log=print) -> Path:
         h = scene_hash(project, scenes, timeline, i)
         out = sdir / f"scene_{i:03d}_{h}.mp4"
         if not out.exists():
-            for old in sdir.glob(f"scene_{i:03d}_*.mp4"):
+            for old in sdir.glob(f"scene_{i:03d}_*.mp4*"):
                 old.unlink()
             todo.append((i, out))
     log(f"  rendering {len(todo)} of {len(scenes)} scenes with {_workers()} workers (others cached)")
@@ -253,6 +263,16 @@ def render_video(project: Project, log=print) -> Path:
                     log(f"    {k}/{len(todo)} scenes done")
 
     files = [next(sdir.glob(f"scene_{i:03d}_*.mp4")) for i in range(len(scenes))]
+    worst, forced = 0.0, 0
+    for i, f in enumerate(files):
+        mj = Path(str(f) + ".motion.json")
+        if mj.exists():
+            m = json.loads(mj.read_text())
+            worst = max(worst, m["longest_still"])
+            forced += bool(m.get("forced"))
+    log(f"  motion check: longest still moment {worst:.1f}s (limit 3s){f', {forced} scene(s) got extra motion' if forced else ''}")
+    if worst > 3.0:
+        raise RuntimeError(f"motion check failed: the screen is still for {worst:.1f}s somewhere")
     lst = project.path("render", "concat.txt")
     lst.write_text("".join(f"file '{f.resolve().as_posix()}'\n" for f in files), encoding="utf-8")
 

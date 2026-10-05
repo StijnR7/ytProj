@@ -94,6 +94,7 @@ video:
   preset: veryfast
   workers: 0               # 0 = auto (half your CPU threads)
   burn_captions: false     # captions are always exported as .srt for upload
+  max_still_seconds: 2.5   # hard rule: nothing on screen may stay still longer than this (scenes are re-rendered with extra motion)
 
 music:
   folder: assets/music     # drop royalty-free tracks here (e.g. YouTube Audio Library). Empty = Zib composes ambient music

@@ -128,3 +128,42 @@ def test_sequence_scene_with_fx():
     sc = make_scene({"mascot": "surprised", "visual": shots[0]["spec"]["visual"]}, ctx)
     for t in (0.0, 0.1, 1.05, 2.1, 2.9):
         assert sc.frame(t).size == (640, 360)
+
+
+def _longest_still(frames):
+    from ytfactory.render.common import MotionAudit
+
+    a = MotionAudit(30)
+    for f in frames:
+        a.add(f)
+    return a.longest_seconds
+
+
+def test_motion_audit_and_forced_motion():
+    from PIL import Image
+
+    from ytfactory.render.common import drift_camera, light_sweep
+
+    flat = Image.new("RGB", (640, 360), (30, 60, 120))
+    assert _longest_still([flat] * 150) > 4  # a frozen frame is detected
+    forced = [light_sweep(drift_camera(flat, i / 30, 1, 2.0), i / 30) for i in range(150)]
+    assert _longest_still(forced) < 2.5  # forced motion moves even a perfectly flat picture
+
+
+@pytest.mark.parametrize("kind", ["title", "stat", "timeline", "list", "comparison", "quote", "mascot", "kinetic", "split", "archive"])
+def test_no_scene_ever_freezes(kind):
+    """Hard rule: nothing may be still for more than 3 seconds, even long after the entrance animations."""
+    visuals = {
+        "title": {"text": "Chapter", "subtitle": ""}, "stat": {"value": 5, "label": "x"},
+        "timeline": {"events": [{"year": "1", "label": "a"}]}, "list": {"heading": "h", "items": ["a"]},
+        "comparison": {"heading": "h", "items": [{"label": "a", "value": 1, "unit": ""}, {"label": "b", "value": 2, "unit": ""}]},
+        "quote": {"text": "Hello.", "author": "A"}, "mascot": {"line": "Hi"}, "kinetic": {"text": "BOOM"},
+        "split": {"left": {"prompt": "a", "label": "A"}, "right": {"prompt": "b", "label": "B"}},
+        "archive": {"query": "x", "caption": "c"},
+    }
+    from PIL import Image
+
+    img = Image.new("RGB", (400, 300), (90, 90, 90))
+    ctx = SceneContext(size=(480, 270), duration=10.0, theme="brand", image=img, image2=img, seed=2)
+    sc = make_scene({"visual": {"type": kind, **visuals[kind]}, "mascot": "none"}, ctx)
+    assert _longest_still([sc.frame(i / 30) for i in range(120, 300)]) < 2.5

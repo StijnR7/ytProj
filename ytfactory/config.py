@@ -89,6 +89,7 @@ DEFAULTS: dict = {
         "preset": "veryfast",
         "workers": 0,
         "burn_captions": False,
+        "max_still_seconds": 2.5,
     },
     "music": {"folder": "assets/music", "volume_db": -20},
 }

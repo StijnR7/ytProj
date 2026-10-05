@@ -84,7 +84,9 @@ python -m ytfactory branding                # regenerate channel art
   - real archive photo, stat counter, timeline, list, bar comparison, quote, chapter title card
   - Zib with a speech bubble
 
-  Every cut has a small zoom-settle, impact moments get shake, flash or punch effects, and paragraphs are joined by hard
+  **Nothing is ever still for more than 3 seconds**: graphics get a continuous camera drift, camera moves run at a
+  constant speed instead of easing to a stop, and the renderer audits every frame; any scene still for over 2.5 s is
+  automatically re-rendered with extra motion. Every cut has a small zoom-settle, impact moments get shake, flash or punch effects, and paragraphs are joined by hard
   cuts, whip-pans, or a brand wipe on chapter titles. Zib reacts in the corner, and its mouth moves with the voice.
 - **Audio**: narration, ducked background music, whooshes, pops and impacts timed to the cuts, loudness-normalised to
   YouTube's -14 LUFS.

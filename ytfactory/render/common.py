@@ -70,6 +70,69 @@ def ease_in_cubic(x: float) -> float:
     return x**3
 
 
+def drift_camera(frame: Image.Image, t: float, seed: int = 0, strength: float = 1.0) -> Image.Image:
+    """Slow 'documentary camera' drift: gentle zoom + pan on three different periods, so the frame is
+    never perfectly still (the three motions never stop at the same moment)."""
+    W, H = frame.size
+    ph = (seed % 97) * 0.37
+    z = 1.0 + strength * (0.05 + 0.025 * math.sin(2 * math.pi * t / 8.0 + ph))
+    w, h = W / z, H / z
+    mx, my = (W - w) / 2, (H - h) / 2
+    x = mx + mx * 0.8 * math.sin(2 * math.pi * t / 11.0 + ph * 1.7)
+    y = my + my * 0.8 * math.sin(2 * math.pi * t / 13.0 + ph * 2.3)
+    return frame.resize((W, H), Image.BILINEAR, box=(x, y, x + w, y + h))
+
+
+@lru_cache(maxsize=4)
+def _glow(size) -> Image.Image:
+    w, h = size
+    y, x = np.ogrid[-1:1:h * 1j, -1:1:w * 1j]
+    a = np.clip(1 - np.sqrt(x**2 + y**2), 0, 1) ** 2 * 60
+    g = Image.new("RGBA", size, (255, 244, 224, 0))
+    g.putalpha(Image.fromarray(a.astype(np.uint8), "L"))
+    return g
+
+
+def light_sweep(frame: Image.Image, t: float) -> Image.Image:
+    """A soft glow that keeps travelling across the frame - movement even on a perfectly flat picture."""
+    W, H = frame.size
+    g = _glow((int(W * 0.6), int(H * 0.9)))
+    x = int((t * W * 0.22) % (W + g.width)) - g.width
+    y = int(H * 0.05 + H * 0.05 * math.sin(t * 0.9))
+    out = frame.convert("RGBA")
+    out.alpha_composite(g, (max(0, x), y), (max(0, -x), 0))
+    return out.convert("RGB")
+
+
+class MotionAudit:
+    """Tracks the longest stretch where nothing on screen visibly moved.
+
+    The frame is cut into a 16x9 grid; if no cell changed noticeably since the last 'moving' frame,
+    the frame counts as still. Any genuine movement anywhere (camera drift, Zib, particles, text) counts."""
+
+    def __init__(self, fps: int, threshold: float = 2.5):
+        self.fps, self.threshold = fps, threshold
+        self.ref = None
+        self.still = 0
+        self.longest = 0
+
+    def add(self, frame: Image.Image) -> None:
+        s = np.asarray(frame.resize((160, 90), Image.BILINEAR).convert("L"), dtype=np.int16)
+        if self.ref is None:
+            self.ref = s
+            return
+        cells = np.abs(s - self.ref).reshape(9, 10, 16, 10).mean(axis=(1, 3))
+        if cells.max() > self.threshold:
+            self.ref, self.still = s, 0
+        else:
+            self.still += 1
+            self.longest = max(self.longest, self.still)
+
+    @property
+    def longest_seconds(self) -> float:
+        return self.longest / self.fps
+
+
 def progress(t: float, start: float, dur: float) -> float:
     return clamp((t - start) / dur) if dur > 0 else (1.0 if t >= start else 0.0)
 

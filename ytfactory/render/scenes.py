@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from .backgrounds import Backdrop, get_theme
 from .common import (
-    CREAM, INK, ORANGE, WHITE, YELLOW, apply_vignette, clamp, cover, drop_shadow, ease_in_out_sine,
+    CREAM, INK, ORANGE, WHITE, YELLOW, apply_vignette, clamp, cover, drift_camera, drop_shadow, ease_in_out_sine,
     ease_out_back, ease_out_cubic, fit_text, font, format_number, paste, progress, rounded_box,
     scale_sprite, text_sprite,
 )
@@ -37,6 +37,9 @@ class SceneContext:
 
 class Scene:
     corner_mascot = True
+    # Scenes whose render() already moves the whole picture at a constant pace set this to True.
+    # Everything else (graphics, cards, Zib scenes) gets a continuous camera drift so the screen never freezes.
+    self_moving = False
 
     def __init__(self, spec: dict, ctx: SceneContext):
         self.spec, self.ctx = spec, ctx
@@ -76,6 +79,8 @@ class Scene:
 
     def frame(self, t: float) -> Image.Image:
         f = self.render(t)
+        if not self.self_moving:
+            f = drift_camera(f, t, self.ctx.seed)
         d = self.ctx.duration
         if self.label is not None:
             p = ease_out_cubic(progress(t, 0.45, 0.5))
@@ -99,6 +104,7 @@ class Scene:
 # ------------------------------------------------------------------ image scenes
 class IllustrationScene(Scene):
     ZOOM = 1.24
+    self_moving = True
 
     def prepare(self):
         self.no_image = self.ctx.image is None
@@ -128,7 +134,7 @@ class IllustrationScene(Scene):
 
     def _box(self, t):
         W, H, Z = self.W, self.H, self.ZOOM
-        p = ease_out_cubic(t / max(0.1, self.ctx.duration)) if self.ctx.duration < 6 else ease_in_out_sine(t / max(0.1, self.ctx.duration))
+        p = clamp(t / max(0.1, self.ctx.duration))  # constant speed: the camera never coasts to a stop
         cam = self.v.get("camera", "zoom_in")
         SW, SH = self.src.width, self.src.height
         if cam in ("zoom_in", "zoom_out"):
@@ -191,7 +197,7 @@ class ArchiveScene(Scene):
         if self.fallback:
             return self.fallback.render(t)
         d = self.ctx.duration
-        p = ease_in_out_sine(t / max(0.1, d))
+        p = clamp(t / max(0.1, d))
         dx = (self.bg.width - self.W) * p
         f = self.bg.crop((int(dx), int((self.bg.height - self.H) / 2), int(dx) + self.W, int((self.bg.height - self.H) / 2) + self.H))
         enter = ease_out_back(progress(t, 0.0, 0.6))
@@ -529,7 +535,7 @@ class KineticScene(Scene):
 
     def render(self, t):
         if self.bg is not None:
-            z = 1 + 0.06 * ease_out_cubic(t / max(0.1, self.ctx.duration))
+            z = 1 + 0.08 * clamp(t / max(0.1, self.ctx.duration))
             w, h = self.bg.width / z, self.bg.height / z
             cx, cy = self.bg.width / 2, self.bg.height / 2
             f = self.bg.resize(self.ctx.size, Image.BILINEAR, box=(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2))
@@ -589,6 +595,7 @@ class SplitScene(Scene):
 
 class VideoScene(Scene):
     """Plays a (pre-normalised) stock clip, with a gentle push-in and the usual overlays."""
+    self_moving = True
 
     def prepare(self):
         import subprocess
@@ -629,7 +636,7 @@ class VideoScene(Scene):
         f = self._read(int(t * self.ctx.fps))
         if f is None:
             f = self.ctx.image.resize(self.ctx.size) if self.ctx.image is not None else self.backdrop.frame(t)
-        z = 1 + 0.05 * ease_in_out_sine(t / max(0.1, self.ctx.duration))
+        z = 1 + 0.06 * clamp(t / max(0.1, self.ctx.duration))  # constant push-in, even if the clip itself is calm
         w, h = self.W / z, self.H / z
         f = f.resize(self.ctx.size, Image.BILINEAR, box=((self.W - w) / 2, (self.H - h) / 2, (self.W + w) / 2, (self.H + h) / 2))
         return apply_vignette(f, 0.25)
@@ -651,6 +658,7 @@ class BrollScene(Scene):
 class SequenceScene(Scene):
     """A paragraph of narration cut into several shots, with punchy cuts and FX."""
     corner_mascot = False
+    self_moving = True  # each shot handles its own motion
     NO_CORNER = {"mascot", "title", "stat", "kinetic"}
 
     def prepare(self):
