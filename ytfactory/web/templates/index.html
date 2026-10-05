@@ -32,7 +32,8 @@ input,select,textarea{background:var(--bg);color:var(--text);border:1px solid va
 .tabs{display:flex;gap:4px;margin-top:16px}.tab{padding:8px 14px;border-radius:10px 10px 0 0;cursor:pointer;background:var(--panel);color:var(--muted)}
 .tab.active{background:var(--panel2);color:var(--text)}
 .tabbody{background:var(--panel2);border-radius:0 14px 14px 14px;padding:16px}
-.sb{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.para{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:12px}.para>.t{color:var(--teal);font-weight:700;font-size:13px;margin-bottom:8px}
+.shots{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px}.shot{flex:0 0 240px;background:var(--bg);border-radius:10px;overflow:hidden}.shot img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#000}.shot .b{padding:8px;font-size:12px}.shot .t{color:var(--teal);font-weight:700;font-size:11px}.shot .n{margin:4px 0;line-height:1.35}.shot .v{color:var(--muted);font-size:11px}button.mini{padding:2px 8px;font-size:12px}
 .scene{background:var(--panel);border-radius:12px;overflow:hidden;border:1px solid var(--line)}
 .scene img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#000}
 .scene .b{padding:10px;font-size:13px}.scene .t{color:var(--teal);font-weight:700;font-size:12px}
@@ -120,15 +121,18 @@ function render() {
   const f = n => `/files/${cur}/${n}?v=${Date.now()%100000}`;
   let body = '';
   if (tab === 'storyboard') {
-    body = P.scenes.length ? `<div class="small" style="margin-bottom:10px">${P.scenes.length} scenes · ${P.words} words${P.length ? ' · ' + fmt(P.length) : ''}. Click 🎲 to re-roll an image.</div><div class="sb">` +
-      P.scenes.map(s => `<div class="scene"><img src="${s.preview ? f(s.preview) : (s.image ? f(s.image) : '')}" alt="">
-        <div class="b"><div class="t">#${s.index} ${s.start!=null?fmt(s.start):''} · ${esc(s.visual.type)} · ${esc(s.chapter)}</div>
-        <div class="n">${esc(s.narration)}</div>
-        <div class="v">${esc(s.visual.prompt || s.visual.query || s.visual.text || s.visual.line || s.visual.label || s.visual.heading || '')}</div>
-        ${['illustration','archive'].includes(s.visual.type) ? `<div class="row" style="margin-top:6px"><button class="ghost" data-needs-idle onclick="reroll(${s.index})">🎲 re-roll</button><button class="ghost" data-needs-idle onclick="reprompt(${s.index})">✎ new prompt</button></div>` : ''}
-        </div></div>`).join('') + '</div>' : '<div class="empty">No script yet - run the pipeline.</div>';
+    const nShots = P.scenes.reduce((a, s) => a + s.shots.length, 0);
+    body = P.scenes.length ? `<div class="small" style="margin-bottom:10px">${P.scenes.length} paragraphs · ${nShots} shots · ${P.words} words${P.length ? ' · ' + fmt(P.length) + ' · a cut every ' + (P.length / nShots).toFixed(1) + 's' : ''}. 🎲 re-rolls an image, ✎ gives a shot a new picture.</div>` +
+      P.scenes.map(s => `<div class="para"><div class="t">#${s.index} ${s.start!=null?fmt(s.start):''} · ${esc(s.chapter)}${s.mascot!=='none'?' · Zib: '+esc(s.mascot):''}</div>
+        <div class="shots">${s.shots.map((sh, j) => `<div class="shot"><img src="${sh.preview ? f(sh.preview) : (sh.image ? f(sh.image) : '')}" alt="">
+          <div class="b"><div class="t">${sh.start!=null?fmt(sh.start):''} · ${esc(sh.visual.type)}${sh.fx!=='none'?' · '+sh.fx:''}</div>
+          <div class="n">${esc(sh.say)}</div>
+          <div class="v">${esc(sh.visual.prompt || sh.visual.query || sh.visual.text || sh.visual.line || sh.visual.label || sh.visual.heading || sh.visual.focus || '')}</div>
+          <div class="row" style="margin-top:6px">${['illustration','archive','split'].includes(sh.visual.type) ? `<button class="ghost mini" data-needs-idle onclick="reroll(${s.index},${j})">🎲</button>` : ''}
+          <button class="ghost mini" data-needs-idle onclick="reprompt(${s.index},${j})">✎</button></div></div></div>`).join('')}</div></div>`).join('')
+      : '<div class="empty">No script yet - run the pipeline.</div>';
   } else if (tab === 'script') {
-    body = P.script ? `<div class="small">Edit narration, visuals, mascot reactions… then save. Only changed scenes get re-voiced/re-rendered.</div>
+    body = P.script ? `<div class="small">Each scene is a list of shots: what Zib says ("say") + what's on screen ("visual"). Edit, then save - only changed scenes get re-voiced/re-rendered.</div>
       <textarea class="code" id="scriptbox">${esc(JSON.stringify(P.script, null, 2))}</textarea>
       <div class="row" style="margin-top:8px"><button onclick="saveScript()">Save script</button><span id="savemsg" class="small"></span></div>` : '<div class="empty">No script yet.</div>';
   } else if (tab === 'research') {
@@ -165,8 +169,8 @@ async function newProject() { const t = $('#topic').value.trim(); if (!t) return
 async function fromIdea(n) { const r = await api('/api/projects', {idea:n}); openProject(r.slug); }
 async function genIdeas() { const r = await api('/api/ideas/generate', {n:12}); if (!r.ok) alert('Another job is running.'); refresh(); }
 async function branding() { await api('/api/branding', {}); setTimeout(refresh, 4000); }
-async function reroll(i) { await api(`/api/projects/${cur}/scene/${i}/reroll`, {}); refresh(); }
-async function reprompt(i) { const s = P.scenes.find(x => x.index === i); const p = prompt('New image prompt:', s.visual.prompt || ''); if (p) { await api(`/api/projects/${cur}/scene/${i}/reroll`, {prompt:p}); refresh(); } }
+async function reroll(i, j) { await api(`/api/projects/${cur}/scene/${i}/shot/${j}/reroll`, {}); refresh(); }
+async function reprompt(i, j) { const sh = P.scenes.find(x => x.index === i).shots[j]; const p = prompt('New image prompt for this shot:', sh.visual.prompt || sh.say); if (p) { await api(`/api/projects/${cur}/scene/${i}/shot/${j}/reroll`, {prompt:p}); refresh(); } }
 async function saveScript() {
   const r = await fetch(`/api/projects/${cur}/script`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({script:$('#scriptbox').value})}).then(r=>r.json());
   $('#savemsg').textContent = r.error ? 'Error: ' + r.error : `Saved (${r.words} words). Now click ② or re-run from "voice".`;

@@ -97,13 +97,19 @@ def project_detail(slug):
         tls = tl.get("scenes", [])
         for s in p.scenes():
             i = s["index"]
-            img = next((f.name for f in p.path("images").glob(f"scene_{i:03d}.*")), None) if p.path("images").exists() else None
-            scenes.append({
-                "index": i, "chapter": s["chapter_title"], "narration": s["narration"], "visual": s["visual"],
-                "mascot": s["mascot"], "start": tls[i]["start"] if i < len(tls) else None,
-                "preview": f"storyboard/scene_{i:03d}.jpg" if p.path("storyboard", f"scene_{i:03d}.jpg").exists() else None,
-                "image": f"images/{img}" if img else None,
-            })
+            st = tls[i]["start"] if i < len(tls) else None
+            shot_t = tls[i].get("shots", []) if i < len(tls) else []
+            shots = []
+            for j, sh in enumerate(s["shots"]):
+                prev = p.path("storyboard", f"scene_{i:03d}_{j:02d}.jpg")
+                img = next(iter(sorted(p.path("images").glob(f"s{i:03d}_{j:02d}*.*"))), None) if p.path("images").exists() else None
+                shots.append({
+                    "say": sh["say"], "visual": sh["visual"], "fx": sh.get("fx", "none"),
+                    "start": (st + shot_t[j]) if st is not None and j < len(shot_t) else None,
+                    "preview": f"storyboard/{prev.name}" if prev.exists() else None,
+                    "image": f"images/{img.name}" if img else None,
+                })
+            scenes.append({"index": i, "chapter": s["chapter_title"], "narration": s["narration"], "mascot": s["mascot"], "start": st, "shots": shots})
     return jsonify(
         meta=p.meta, script=script, words=word_count(script) if script else 0, scenes=scenes, log=log, files=files,
         texts=texts, length=(p.read_json("timeline.json") or {}).get("total_seconds"),
@@ -138,26 +144,31 @@ def save_script(slug):
     return jsonify(ok=True, words=word_count(script))
 
 
-@app.post("/api/projects/<slug>/scene/<int:idx>/reroll")
-def reroll(slug, idx):
+@app.post("/api/projects/<slug>/scene/<int:idx>/shot/<int:shot>/reroll")
+def reroll(slug, idx, shot):
     p = _project(slug)
-    for f in p.path("images").glob(f"scene_{idx:03d}.*"):
+    for f in p.path("images").glob(f"s{idx:03d}_{shot:02d}*.*"):
         f.unlink()
     credits = p.read_json("credits.json", {}) or {}
-    credits.pop(str(idx), None)
+    for k in [k for k in credits if k.startswith(f"{idx}:{shot}")]:
+        credits.pop(k)
     p.write_json("credits.json", credits)
-    # new seed for the next generation
     script = p.read_json("script.json")
     k = 0
     for ch in script["chapters"]:
         for sc in ch["scenes"]:
-            if k == idx:
-                sc["visual"]["seed_bump"] = int(sc["visual"].get("seed_bump", 0)) + 1
-                if request.json and request.json.get("prompt"):
-                    sc["visual"]["prompt"] = request.json["prompt"]
+            if k == idx and shot < len(sc["shots"]):
+                v = sc["shots"][shot]["visual"]
+                v["seed_bump"] = int(v.get("seed_bump", 0)) + 1
+                new_prompt = (request.json or {}).get("prompt")
+                if new_prompt:
+                    if v["type"] == "closeup" or v["type"] == "kinetic":  # upgrade to a real illustration
+                        sc["shots"][shot]["visual"] = v = {"type": "illustration", "prompt": new_prompt, "camera": "zoom_in", "seed_bump": v["seed_bump"]}
+                    else:
+                        v["prompt"] = new_prompt
             k += 1
     p.write_json("script.json", script)
-    ok = start_job(f"Re-rolling image for scene {idx}", slug, lambda: pipeline.run(p, "visuals", "storyboard"))
+    ok = start_job(f"Re-rolling image for scene {idx} shot {shot}", slug, lambda: pipeline.run(p, "visuals", "storyboard"))
     return jsonify(ok=ok)
 
 

@@ -25,14 +25,15 @@ script:
   target_words: 2000       # ~12-13 min at Zib's speaking pace
   min_words: 1750
   min_video_minutes: 10
+  hook_doctor: true        # extra Claude pass that rewrites the first 30s for a harder hook
 
 voice:
   engine: kokoro           # kokoro (local, free) | edge (free online MS voices) | dummy (testing)
   kokoro_voice: am_michael # try: python -m ytfactory voices
-  speed: 1.0
+  speed: 1.05             # slightly brisk = better retention
   edge_voice: en-US-AndrewNeural
-  pause_after_scene: 0.35  # seconds of breathing room between scenes
-  pause_after_chapter: 0.8
+  pause_after_scene: 0.15  # seconds of silence between paragraphs (keep it tight - dead air loses viewers)
+  pause_after_chapter: 0.4
 
 images:
   backend: sdcpp           # sdcpp (stable-diffusion.cpp, Vulkan = AMD friendly) | comfyui | none
@@ -61,6 +62,7 @@ images:
     cfg: 6.0
     sampler: dpmpp_2m
     scheduler: karras
+  max_images: 150          # cap on new images per video (extra shots become closeups of earlier images)
   wikimedia: true          # fetch real public-domain / CC images for archive scenes (kings, paintings, NASA photos)
 
 video:

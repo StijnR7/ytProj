@@ -30,6 +30,8 @@ class SceneContext:
     is_last: bool = False
     channel_name: str = "Probe Into It"
     burn_captions: bool = False
+    image2: Image.Image | None = None             # right-hand image of a split shot
+    shots: list = field(default_factory=list)     # [{spec, start, image, image2}] for multi-shot scenes
 
 
 class Scene:
@@ -95,7 +97,7 @@ class Scene:
 
 # ------------------------------------------------------------------ image scenes
 class IllustrationScene(Scene):
-    ZOOM = 1.16
+    ZOOM = 1.24
 
     def prepare(self):
         self.no_image = self.ctx.image is None
@@ -125,7 +127,7 @@ class IllustrationScene(Scene):
 
     def _box(self, t):
         W, H, Z = self.W, self.H, self.ZOOM
-        p = ease_in_out_sine(t / max(0.1, self.ctx.duration))
+        p = ease_out_cubic(t / max(0.1, self.ctx.duration)) if self.ctx.duration < 6 else ease_in_out_sine(t / max(0.1, self.ctx.duration))
         cam = self.v.get("camera", "zoom_in")
         SW, SH = self.src.width, self.src.height
         if cam in ("zoom_in", "zoom_out"):
@@ -148,6 +150,8 @@ class IllustrationScene(Scene):
     def render(self, t):
         f = self.src.resize(self.ctx.size, Image.BILINEAR, box=self._box(t))
         f = apply_vignette(f, 0.35)
+        if not self.no_image:
+            self.backdrop.draw_particles(f, t, 0.45)
         if self.no_image and self.ctx.sentences:
             sents = self.ctx.sentences
             i = max([k for k, x in enumerate(sents) if x["start"] - 0.1 <= t] or [0])
@@ -479,6 +483,173 @@ class MascotScene(Scene):
         return f
 
 
+class CloseupScene(IllustrationScene):
+    """A free extra cut: a tight moving crop on the previous image."""
+    REGIONS = {"center": (0.22, 0.2), "left": (0.02, 0.15), "right": (0.42, 0.15), "top": (0.22, 0.0), "bottom": (0.22, 0.4)}
+
+    def prepare(self):
+        img = self.ctx.image
+        if img is not None:
+            fx, fy = self.REGIONS.get(self.v.get("focus", "center"), (0.22, 0.2))
+            w, h = img.width * 0.56, img.height * 0.56
+            self.ctx = SceneContext(**{**self.ctx.__dict__, "image": img.crop((int(img.width * fx), int(img.height * fy), int(img.width * fx + w), int(img.height * fy + h)))})
+        super().prepare()
+
+
+class KineticScene(Scene):
+    """Big words slam onto the screen one by one."""
+    corner_mascot = False
+
+    def prepare(self):
+        th = self.theme
+        text = str(self.v.get("text", "")).upper()
+        if self.ctx.image is not None:
+            bg = cover(self.ctx.image, (self.W // 3, self.H // 3), 1.15).filter(ImageFilter.GaussianBlur(6))
+            self.bg = Image.blend(bg, Image.new("RGB", bg.size, (8, 12, 30)), 0.62).resize((int(self.W * 1.15), int(self.H * 1.15)), Image.BILINEAR)
+            fg, accent = WHITE, YELLOW
+        else:
+            self.bg = None
+            fg, accent = th.fg, th.accent
+        f, lines, lh = fit_text(text, "display", int(self.W * 0.82), int(self.H * 0.62), int(self.H * 0.2), 50, spacing=1.05)
+        words = text.split()
+        key = {w for w in words if any(c.isdigit() for c in w)} or ({max(words, key=len)} if words else set())
+        self.words = []
+        y0 = self.H / 2 - lh * len(lines) / 2 + lh / 2
+        n = 0
+        for li, line in enumerate(lines):
+            ws = line.split()
+            total = sum(f.getlength(w) for w in ws) + f.getlength(" ") * (len(ws) - 1)
+            x = self.W / 2 - total / 2
+            for w in ws:
+                spr = text_sprite(w, "display", f.size, fill=accent if w in key else fg, stroke=max(4, f.size // 22), stroke_fill=INK, shadow=10)
+                self.words.append((spr, x + f.getlength(w) / 2, y0 + li * lh, 0.05 + n * 0.11))
+                x += f.getlength(w + " ")
+                n += 1
+
+    def render(self, t):
+        if self.bg is not None:
+            z = 1 + 0.06 * ease_out_cubic(t / max(0.1, self.ctx.duration))
+            w, h = self.bg.width / z, self.bg.height / z
+            cx, cy = self.bg.width / 2, self.bg.height / 2
+            f = self.bg.resize(self.ctx.size, Image.BILINEAR, box=(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2))
+        else:
+            f = self.backdrop.frame(t)
+        for spr, x, y, delay in self.words:
+            k = progress(t, delay, 0.22)
+            if k <= 0:
+                continue
+            sc = 1 + 0.9 * (1 - ease_out_cubic(k))
+            paste(f, scale_sprite(spr, sc) if sc > 1.001 else spr, (x, y), opacity=clamp(k * 2.5), anchor="c")
+        return f
+
+
+class SplitScene(Scene):
+    """Two images side by side (versus / before-after)."""
+    corner_mascot = False
+
+    def prepare(self):
+        pw, ph = int(self.W * 0.44), int(self.H * 0.62)
+        self.panels = []
+        for side, img in (("left", self.ctx.image), ("right", self.ctx.image2)):
+            info = self.v.get(side, {})
+            if img is not None:
+                pic = cover(img, (pw, ph)).convert("RGBA")
+            else:
+                pic = Backdrop(self.theme.name, (pw, ph), self.ctx.seed + (1 if side == "right" else 0)).frame(0).convert("RGBA")
+            mask = Image.new("L", (pw, ph), 0)
+            ImageDraw.Draw(mask).rounded_rectangle([0, 0, pw - 1, ph - 1], 30, fill=255)
+            panel = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+            panel.paste(pic, (0, 0), mask)
+            ImageDraw.Draw(panel).rounded_rectangle([0, 0, pw - 1, ph - 1], 30, outline=(*CREAM, 255), width=8)
+            label = info.get("label", "")
+            lab = None
+            if label:
+                txt = text_sprite(label.upper(), "heading", int(self.H * 0.05), fill=INK)
+                lab = rounded_box((txt.width + 50, txt.height + 14), 20, (*CREAM, 250))
+                lab.alpha_composite(txt, (25, 7))
+            self.panels.append((drop_shadow(panel, 20, 0.5, (0, 10)), lab))
+        self.vs = text_sprite("VS", "display", int(self.H * 0.12), fill=YELLOW, stroke=8, stroke_fill=INK, shadow=10)
+
+    def render(self, t):
+        f = self.backdrop.frame(t)
+        for k, (panel, lab) in enumerate(self.panels):
+            p = ease_out_back(progress(t, 0.05 + k * 0.18, 0.45))
+            cx = self.W * (0.27 if k == 0 else 0.73)
+            off = (1 - p) * self.W * 0.6 * (-1 if k == 0 else 1)
+            drift = math.sin(t * 0.8 + k) * 6
+            paste(f, panel, (cx + off, self.H * 0.46 + drift), opacity=clamp(p * 2), anchor="c")
+            if lab is not None:
+                paste(f, lab, (cx + off, self.H * 0.84), opacity=clamp(p * 2), anchor="c")
+        vk = ease_out_back(progress(t, 0.45, 0.35))
+        if vk > 0.01:
+            paste(f, scale_sprite(self.vs, vk), (self.W / 2, self.H * 0.46), anchor="c")
+        return f
+
+
+class SequenceScene(Scene):
+    """A paragraph of narration cut into several shots, with punchy cuts and FX."""
+    corner_mascot = False
+    NO_CORNER = {"mascot", "title", "stat", "kinetic"}
+
+    def prepare(self):
+        ctx = self.ctx
+        self.starts = [sh["start"] for sh in ctx.shots]
+        self.subs = []
+        for j, sh in enumerate(ctx.shots):
+            st = sh["start"]
+            en = ctx.shots[j + 1]["start"] if j + 1 < len(ctx.shots) else ctx.duration
+            dur = max(1 / ctx.fps, en - st)
+            env = None
+            if ctx.envelope is not None:
+                a = int(st * ctx.fps)
+                env = ctx.envelope[a:]
+            sub_ctx = SceneContext(
+                size=ctx.size, fps=ctx.fps, duration=dur, theme=ctx.theme, seed=ctx.seed * 13 + j,
+                image=sh.get("image"), image2=sh.get("image2"), envelope=env,
+                sentences=[{**x, "start": x["start"] - st, "end": x["end"] - st} for x in ctx.sentences if x["end"] > st and x["start"] < en],
+                chapter_number=ctx.chapter_number, is_last=ctx.is_last and j == len(ctx.shots) - 1,
+                channel_name=ctx.channel_name, burn_captions=False,
+            )
+            spec = {"visual": sh["spec"]["visual"], "mascot": "none", "on_screen_text": sh["spec"].get("label", "")}
+            if spec["visual"]["type"] in ("mascot", "stat"):
+                spec["mascot"] = self.spec.get("mascot", "none")
+            self.subs.append((st, SCENES.get(spec["visual"]["type"], IllustrationScene)(spec, sub_ctx), sh["spec"].get("fx", "none")))
+        expr = self.spec.get("mascot", "none")
+        self.zib = ZibActor(int(self.H * 0.22), expr, seed=ctx.seed, envelope=ctx.envelope, fps=ctx.fps, enter_at=0.4) if expr != "none" else None
+
+    def render(self, t):
+        j = 0
+        for k, st in enumerate(self.starts):
+            if t >= st:
+                j = k
+        st, sub, fx = self.subs[j]
+        lt = t - st
+        f = sub.frame(lt)
+        # every cut lands with a tiny zoom-settle; fx add extra punch
+        zoom = 1.0
+        if j > 0 and lt < 0.25:
+            zoom = 1 + 0.035 * (1 - ease_out_cubic(lt / 0.25))
+        if fx == "punch" and lt < 0.4:
+            zoom = max(zoom, 1 + 0.16 * (1 - ease_out_cubic(lt / 0.4)))
+        dx = dy = 0.0
+        if fx == "shake" and lt < 0.5:
+            a = 22 * (1 - lt / 0.5)
+            dx, dy = a * math.sin(lt * 95), a * math.cos(lt * 71)
+            zoom = max(zoom, 1.05)
+        if zoom > 1.0005 or dx or dy:
+            w, h = self.W / zoom, self.H / zoom
+            x0 = (self.W - w) / 2 + dx
+            y0 = (self.H - h) / 2 + dy
+            x0 = min(max(0, x0), self.W - w)
+            y0 = min(max(0, y0), self.H - h)
+            f = f.resize(self.ctx.size, Image.BILINEAR, box=(x0, y0, x0 + w, y0 + h))
+        if fx == "flash" and lt < 0.3:
+            f = Image.blend(f, Image.new("RGB", f.size, (255, 255, 255)), 0.85 * (1 - lt / 0.3))
+        if self.zib is not None and sub.v.get("type") not in self.NO_CORNER:
+            self.zib.draw(f, self.W - self.H * 0.16, self.H - 20, t)
+        return f
+
+
 SCENES = {
     "illustration": IllustrationScene,
     "archive": ArchiveScene,
@@ -489,8 +660,13 @@ SCENES = {
     "comparison": ComparisonScene,
     "quote": QuoteScene,
     "mascot": MascotScene,
+    "closeup": CloseupScene,
+    "kinetic": KineticScene,
+    "split": SplitScene,
 }
 
 
 def make_scene(spec: dict, ctx: SceneContext) -> Scene:
+    if ctx.shots and len(ctx.shots) > 0:
+        return SequenceScene(spec, ctx)
     return SCENES.get(spec.get("visual", {}).get("type"), IllustrationScene)(spec, ctx)

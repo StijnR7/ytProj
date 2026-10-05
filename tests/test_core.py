@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from ytfactory.claude_cli import extract_json
-from ytfactory.pipeline import make_srt
+from ytfactory.pipeline import make_srt, shot_starts
 from ytfactory.project import normalize_script, slugify, theme_for, validate_script, word_count
 from ytfactory.render.audio import ambient_music, mouth_envelope
 from ytfactory.render.mascot import EXPRESSIONS, draw_zib
@@ -43,11 +43,30 @@ def test_validate_and_normalize():
     s = normalize_script(SCRIPT, "space")
     sc = s["chapters"][0]["scenes"]
     assert sc[0]["visual"]["value"] == 1200.0 and sc[0]["mascot"] == "none"
-    assert sc[1]["visual"]["type"] == "mascot"  # comparison with <2 items degrades gracefully
-    assert sc[2]["visual"]["camera"] == "zoom_in"
+    assert sc[1]["visual"]["type"] == "kinetic"  # comparison with <2 items degrades gracefully
+    assert sc[2]["visual"]["camera"] in ("zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down")
+    assert all(len(x["shots"]) == 1 for x in sc)  # old single-visual scenes become one shot
     assert word_count(s) == 5
     with pytest.raises(ValueError):
         validate_script({"chapters": [{"title": "x", "scenes": [{"narration": "a", "visual": {"type": "nope"}}]}]})
+
+
+def test_shot_scripts_and_timing():
+    script = {"chapters": [{"title": "A", "scenes": [{"mascot": "happy", "shots": [
+        {"say": "The club moves fast.", "visual": {"type": "illustration", "prompt": "club"}, "fx": "shake"},
+        {"say": "Faster than a bullet.", "visual": {"type": "kinetic", "text": "BULLET SPEED"}},
+        {"say": "Look closer.", "visual": {"type": "closeup", "focus": "nope"}},
+    ]}]}]}
+    validate_script(script)
+    s = normalize_script(script, "animals")
+    sc = s["chapters"][0]["scenes"][0]
+    assert sc["narration"] == "The club moves fast. Faster than a bullet. Look closer."
+    assert sc["shots"][0]["fx"] == "shake" and sc["shots"][2]["visual"]["focus"] == "center"
+    sentences = [{"text": "The club moves fast.", "start": 0.0, "end": 1.0},
+                 {"text": "Faster than a bullet.", "start": 1.1, "end": 2.1},
+                 {"text": "Look closer.", "start": 2.2, "end": 2.8}]
+    starts = shot_starts(sc["shots"], sentences, sc["narration"])
+    assert starts[0] == 0.0 and abs(starts[1] - 1.1) < 0.05 and abs(starts[2] - 2.2) < 0.05
 
 
 def test_srt():
@@ -82,10 +101,29 @@ def test_every_scene_renders(kind):
         "comparison": {"heading": "h", "items": [{"label": "a", "value": 1, "unit": "m"}, {"label": "b", "value": 1000, "unit": "m"}]},
         "quote": {"text": "To be or not.", "author": "Someone"},
         "mascot": {"line": "Hi!"},
+        "closeup": {"focus": "left", "camera": "zoom_in"},
+        "kinetic": {"text": "10,000 TIMES GRAVITY"},
+        "split": {"left": {"prompt": "a", "label": "Before"}, "right": {"prompt": "b", "label": "After"}},
     }
     spec = {"visual": {"type": kind, **visuals[kind]}, "mascot": "happy", "on_screen_text": "Label"}
-    ctx = SceneContext(size=(640, 360), duration=4.0, theme="history", envelope=np.ones(200, dtype=np.int8))
+    from PIL import Image
+    img = Image.new("RGB", (400, 300), (40, 90, 160))
+    ctx = SceneContext(size=(640, 360), duration=4.0, theme="history", envelope=np.ones(200, dtype=np.int8), image=img, image2=img)
     sc = make_scene(spec, ctx)
     for t in (0.0, 1.0, 3.9):
         f = sc.frame(t)
         assert f.size == (640, 360) and f.mode == "RGB"
+
+
+def test_sequence_scene_with_fx():
+    from PIL import Image
+    img = Image.new("RGB", (400, 300), (200, 120, 60))
+    shots = [
+        {"spec": {"visual": {"type": "illustration", "prompt": "x", "camera": "zoom_in"}, "fx": "flash", "label": "Tag"}, "start": 0.0, "image": img, "image2": None},
+        {"spec": {"visual": {"type": "kinetic", "text": "BOOM"}, "fx": "shake", "label": ""}, "start": 1.0, "image": img, "image2": None},
+        {"spec": {"visual": {"type": "closeup", "focus": "right"}, "fx": "punch", "label": ""}, "start": 2.0, "image": img, "image2": None},
+    ]
+    ctx = SceneContext(size=(640, 360), duration=3.0, theme="space", shots=shots, envelope=np.ones(100, dtype=np.int8))
+    sc = make_scene({"mascot": "surprised", "visual": shots[0]["spec"]["visual"]}, ctx)
+    for t in (0.0, 0.1, 1.05, 2.1, 2.9):
+        assert sc.frame(t).size == (640, 360)

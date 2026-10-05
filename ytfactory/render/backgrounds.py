@@ -149,17 +149,20 @@ class Backdrop:
             for _ in range(n)
         ]
 
-    def frame(self, t: float) -> Image.Image:
-        img = self.base.copy()
+    def draw_particles(self, img: Image.Image, t: float, strength: float = 1.0, color=None) -> None:
         d = ImageDraw.Draw(img, "RGBA")
-        W, H = self.size
-        col = {"space": (255, 255, 255), "history": (120, 80, 40), "animals": (255, 250, 200),
-               "hypotheticals": (255, 180, 220), "brand": (255, 255, 255)}[self.theme.name]
+        W, H = img.size
+        col = color or {"space": (255, 255, 255), "history": (120, 80, 40), "animals": (255, 250, 200),
+                        "hypotheticals": (255, 180, 220), "brand": (255, 255, 255)}[self.theme.name]
         for (x0, y0, r, vx, vy, ph, sp) in self.particles:
             x = (x0 + vx * t) % W
             y = (y0 + vy * t) % H
-            a = int(70 + 110 * (0.5 + 0.5 * math.sin(ph + t * sp * 2)))
+            a = int((70 + 110 * (0.5 + 0.5 * math.sin(ph + t * sp * 2))) * strength)
             d.ellipse([x - r, y - r, x + r, y + r], fill=(*col, a))
+
+    def frame(self, t: float) -> Image.Image:
+        img = self.base.copy()
+        self.draw_particles(img, t)
         return img
 
 

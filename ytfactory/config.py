@@ -27,14 +27,14 @@ DEFAULTS: dict = {
         "description_footer": "",
     },
     "claude": {"command": "claude", "model": "", "web_research": True, "timeout_minutes": 20},
-    "script": {"target_words": 2000, "min_words": 1750, "min_video_minutes": 10},
+    "script": {"target_words": 2000, "min_words": 1750, "min_video_minutes": 10, "hook_doctor": True},
     "voice": {
         "engine": "kokoro",
         "kokoro_voice": "am_michael",
-        "speed": 1.0,
+        "speed": 1.05,
         "edge_voice": "en-US-AndrewNeural",
-        "pause_after_scene": 0.35,
-        "pause_after_chapter": 0.8,
+        "pause_after_scene": 0.15,
+        "pause_after_chapter": 0.4,
     },
     "images": {
         "backend": "none",
@@ -61,6 +61,7 @@ DEFAULTS: dict = {
             "sampler": "dpmpp_2m",
             "scheduler": "karras",
         },
+        "max_images": 150,
         "wikimedia": True,
     },
     "video": {

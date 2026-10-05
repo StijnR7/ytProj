@@ -19,15 +19,64 @@ from .audio import build_mix, mouth_envelope
 from .common import ORANGE, ease_in_out_sine
 from .scenes import SceneContext, make_scene
 
-RENDER_VERSION = "2"
+RENDER_VERSION = "3"
+
+_IMG_CACHE: dict = {}
 
 
-def scene_image(project: Project, idx: int) -> Image.Image | None:
+def _load(path: Path | None) -> Image.Image | None:
+    if path is None:
+        return None
+    key = (str(path), path.stat().st_mtime_ns)
+    if key not in _IMG_CACHE:
+        if len(_IMG_CACHE) > 24:
+            _IMG_CACHE.clear()
+        _IMG_CACHE[key] = Image.open(path).convert("RGB")
+    return _IMG_CACHE[key]
+
+
+def shot_image(project: Project, scene: int, shot: int, side: str = "") -> Path | None:
     for ext in ("png", "jpg"):
-        p = project.path("images", f"scene_{idx:03d}.{ext}")
+        p = project.path("images", f"s{scene:03d}_{shot:02d}{side}.{ext}")
         if p.exists():
-            return Image.open(p).convert("RGB")
+            return p
+    if not side and shot == 0:  # projects made before shots existed
+        for ext in ("png", "jpg"):
+            p = project.path("images", f"scene_{scene:03d}.{ext}")
+            if p.exists():
+                return p
     return None
+
+
+def previous_image(project: Project, scenes: list[dict], scene: int, shot: int) -> Path | None:
+    """Most recent image at or before (scene, shot) - used by closeups and kinetic backgrounds."""
+    i, j = scene, shot
+    while i >= 0:
+        while j >= 0:
+            if scenes[i]["shots"][j]["visual"]["type"] in ("illustration", "archive", "split"):
+                p = shot_image(project, i, j) or shot_image(project, i, j, "a")
+                if p:
+                    return p
+            j -= 1
+        i -= 1
+        if i >= 0:
+            j = len(scenes[i]["shots"]) - 1
+    return None
+
+
+def shot_images(project: Project, scenes: list[dict], idx: int) -> list[tuple[Path | None, Path | None]]:
+    out = []
+    for j, sh in enumerate(scenes[idx]["shots"]):
+        t = sh["visual"]["type"]
+        if t in ("illustration", "archive"):
+            out.append((shot_image(project, idx, j), None))
+        elif t == "split":
+            out.append((shot_image(project, idx, j, "a"), shot_image(project, idx, j, "b")))
+        elif t in ("closeup", "kinetic"):
+            out.append((previous_image(project, scenes, idx, j - 1) if j else previous_image(project, scenes, idx - 1, len(scenes[idx - 1]["shots"]) - 1) if idx else None, None))
+        else:
+            out.append((None, None))
+    return out
 
 
 def build_context(project: Project, scenes: list[dict], timeline: dict, idx: int) -> SceneContext:
@@ -40,12 +89,17 @@ def build_context(project: Project, scenes: list[dict], timeline: dict, idx: int
     wav = project.path("audio", f"scene_{idx:03d}.wav")
     if wav.exists():
         a, sr = sf.read(str(wav), dtype="float32")
-        env = mouth_envelope(a, sr, fps, frames)
+        pad = np.zeros(int(tl["voice_offset"] * sr), dtype=np.float32)
+        env = mouth_envelope(np.concatenate([pad, a]), sr, fps, frames)
+    starts = tl.get("shots") or [0.0]
+    shots = []
+    for j, (sh, (im1, im2)) in enumerate(zip(scenes[idx]["shots"], shot_images(project, scenes, idx))):
+        shots.append({"spec": sh, "start": starts[j] if j < len(starts) else starts[-1], "image": _load(im1), "image2": _load(im2)})
     return SceneContext(
         size=(v["width"], v["height"]), fps=fps, duration=frames / fps, theme=project.theme, seed=idx * 7 + 3,
-        image=scene_image(project, idx), envelope=env, sentences=tl.get("sentences", []),
+        image=shots[0]["image"] if shots else None, envelope=env, sentences=tl.get("sentences", []),
         chapter_number=scenes[idx]["chapter_index"] + 1, is_last=idx == len(scenes) - 1,
-        channel_name=cfg["channel"]["name"], burn_captions=bool(v.get("burn_captions")),
+        channel_name=cfg["channel"]["name"], burn_captions=bool(v.get("burn_captions")), shots=shots,
     )
 
 
@@ -55,17 +109,32 @@ def scene_hash(project: Project, scenes: list[dict], timeline: dict, idx: int) -
     for j in (idx - 1, idx):
         if j < 0:
             continue
-        parts.append(json.dumps({k: scenes[j].get(k) for k in ("visual", "mascot", "on_screen_text")}, sort_keys=True))
-        parts.append(str(timeline["scenes"][j]["frames"]))
-        for ext in ("png", "jpg"):
-            p = project.path("images", f"scene_{j:03d}.{ext}")
-            if p.exists():
-                parts.append(f"{p.stat().st_mtime_ns}")
+        parts.append(json.dumps({k: scenes[j].get(k) for k in ("shots", "mascot")}, sort_keys=True))
+        parts.append(json.dumps(timeline["scenes"][j], sort_keys=True))
+        for pair in shot_images(project, scenes, j):
+            for im in pair:
+                if im is not None:
+                    parts.append(f"{im.name}:{im.stat().st_mtime_ns}")
         w = project.path("audio", f"scene_{j:03d}.wav")
         if w.exists():
             parts.append(f"{w.stat().st_mtime_ns}")
     parts.append(str(idx == len(scenes) - 1))
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _whip(prev: Image.Image, cur: Image.Image, p: float) -> Image.Image:
+    """Fast whip-pan: old frame slides out left, new slides in, with motion blur."""
+    W, H = cur.size
+    e = ease_in_out_sine(p)
+    x = int(e * W)
+    out = Image.new("RGB", (W, H))
+    out.paste(prev.crop((x, 0, W, H)), (0, 0))
+    out.paste(cur.crop((0, 0, x, H)), (W - x, 0))
+    blur = 1 - abs(0.5 - p) * 2  # strongest in the middle
+    if blur > 0.05:
+        k = max(2, int(48 * blur))
+        out = out.resize((max(1, W // k), H), Image.BILINEAR).resize((W, H), Image.BILINEAR)
+    return out
 
 
 def _wipe(prev: Image.Image, cur: Image.Image, p: float) -> Image.Image:
@@ -93,16 +162,22 @@ def render_scene(slug: str, idx: int, out_path: str, preview: bool = False) -> s
     fps = v["fps"]
     frames = timeline["scenes"][idx]["frames"]
 
-    if preview:
-        scene.frame(min(ctx.duration * 0.6, ctx.duration - 0.05)).resize((640, 360), Image.LANCZOS).save(out_path, quality=85)
+    if preview:  # one still per shot
+        out_dir = Path(out_path)
+        for j, sh in enumerate(ctx.shots):
+            st = sh["start"]
+            en = ctx.shots[j + 1]["start"] if j + 1 < len(ctx.shots) else ctx.duration
+            t = min(st + (en - st) * 0.6, ctx.duration - 0.05)
+            scene.frame(t).resize((640, 360), Image.LANCZOS).save(out_dir / f"scene_{idx:03d}_{j:02d}.jpg", quality=85)
         return out_path
 
     prev_last = None
-    kind = scenes[idx]["visual"]["type"]
+    kind = scenes[idx]["shots"][0]["visual"]["type"]
     if idx > 0:
         pctx = build_context(project, scenes, timeline, idx - 1)
         prev_last = make_scene(scenes[idx - 1], pctx).frame(pctx.duration - 1 / fps)
-    trans = 0.5 if kind == "title" else 0.3
+    # chapter titles get the brand wipe; every 3rd paragraph a whip-pan; otherwise a hard cut
+    trans = 0.5 if kind == "title" else (0.25 if idx % 3 == 1 else 0.0)
 
     tmp = out_path + ".part.mp4"
     cmd = [
@@ -117,7 +192,7 @@ def render_scene(slug: str, idx: int, out_path: str, preview: bool = False) -> s
             f = scene.frame(t)
             if prev_last is not None and t < trans:
                 p = t / trans
-                f = _wipe(prev_last, f, p) if kind == "title" else Image.blend(prev_last, f, ease_in_out_sine(p))
+                f = _wipe(prev_last, f, p) if kind == "title" else _whip(prev_last, f, p)
             proc.stdin.write(f.tobytes())
     finally:
         proc.stdin.close()
@@ -140,10 +215,10 @@ def render_storyboard(project: Project, log=print) -> None:
     jobs = []
     with ProcessPoolExecutor(_workers()) as ex:
         for i in range(len(scenes)):
-            jobs.append(ex.submit(render_scene, project.slug, i, str(out_dir / f"scene_{i:03d}.jpg"), True))
+            jobs.append(ex.submit(render_scene, project.slug, i, str(out_dir), True))
         for k, fut in enumerate(as_completed(jobs)):
             fut.result()
-    log(f"  storyboard: {len(scenes)} preview frames")
+    log(f"  storyboard: {sum(len(s['shots']) for s in scenes)} preview frames")
 
 
 def render_video(project: Project, log=print) -> Path:
@@ -182,11 +257,18 @@ def render_video(project: Project, log=print) -> Path:
         a, sr = sf.read(str(project.path("audio", f"scene_{i:03d}.wav")), dtype="float32")
         st = int((tl["start"] + tl["voice_offset"]) * SR)
         narr[st: st + len(a)] += a[: len(narr) - st]
-        kind = scenes[i]["visual"]["type"]
-        if kind == "title":
-            sfx.append((tl["start"], "whoosh"))
-        elif kind in ("stat", "mascot") and i > 0:
-            sfx.append((tl["start"] + 0.35, "pop"))
+        shot_t = tl.get("shots") or [0.0]
+        for j, sh in enumerate(scenes[i]["shots"]):
+            st_ = tl["start"] + shot_t[min(j, len(shot_t) - 1)]
+            kind, fx = sh["visual"]["type"], sh.get("fx", "none")
+            if kind == "title":
+                sfx.append((st_, "whoosh"))
+            elif j == 0 and i % 3 == 1:
+                sfx.append((max(0.0, st_ - 0.05), "whoosh"))  # whip-pan
+            if kind in ("kinetic", "stat", "mascot") and (i or j):
+                sfx.append((st_ + 0.05, "pop"))
+            if fx in ("shake", "flash", "punch"):
+                sfx.append((st_, "impact"))
     mix = project.path("render", "mix.wav")
     build_mix(narr, SR, sfx, total, resolve(cfg["music"]["folder"]), project.theme, float(cfg["music"]["volume_db"]), len(scenes), mix)
 

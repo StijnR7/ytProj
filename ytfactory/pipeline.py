@@ -5,6 +5,7 @@ import json
 import math
 import random
 import traceback
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
@@ -12,7 +13,7 @@ import soundfile as sf
 from . import claude_cli, prompts
 from .config import PROJECTS, load_config
 from .images import ImageGenError, credit_line, fetch_wikimedia, generate_image
-from .project import STAGES, Project, normalize_script, validate_script, word_count
+from .project import IMAGE_TYPES, STAGES, Project, normalize_script, validate_script, word_count
 from .tts import SR, synth_scene
 
 IDEAS_FILE = PROJECTS / "ideas.json"
@@ -70,16 +71,43 @@ def stage_script(p: Project, log) -> None:
             break
         log("  script too short for 10+ minutes - asking Claude to expand it")
         script = claude_cli.ask_json(prompts.expand_prompt(script, wc, sc["target_words"]), validate=validate_script, log=log)
+    if load_config()["script"].get("hook_doctor", True):
+        try:
+            script = hook_doctor(script, research, log)
+        except Exception as e:  # noqa: BLE001 - the original hook is still usable
+            log(f"  hook doctor skipped: {e}")
     script = normalize_script(script, m["category"])
-    # Make sure every chapter after the first opens with a title card and the video ends on Zib.
+    # Every chapter after the first opens with a title card; the video ends on Zib.
     for ci, ch in enumerate(script["chapters"]):
-        if ci > 0 and ch["scenes"][0]["visual"]["type"] != "title":
-            ch["scenes"].insert(0, {"narration": "", "visual": {"type": "title", "text": ch["title"], "subtitle": ""}, "mascot": "none", "on_screen_text": ""})
+        if ci > 0 and ch["scenes"][0]["shots"][0]["visual"]["type"] != "title":
+            ch["scenes"].insert(0, {"mascot": "none", "shots": [{"say": "", "visual": {"type": "title", "text": ch["title"], "subtitle": ""}, "fx": "none", "label": ""}]})
     last = script["chapters"][-1]["scenes"][-1]
-    if last["visual"]["type"] != "mascot":
-        last["visual"] = {"type": "mascot", "line": ""}
-        last["mascot"] = "happy"
+    if last["shots"][-1]["visual"]["type"] != "mascot":
+        last["shots"][-1]["visual"] = {"type": "mascot", "line": ""}
+    last["mascot"] = "happy"
+    script = normalize_script(script, m["category"])
+    n_shots = sum(len(sc["shots"]) for c in script["chapters"] for sc in c["scenes"])
+    log(f"  final script: {word_count(script)} words, {n_shots} shots")
     p.write_json("script.json", script)
+
+
+def hook_doctor(script: dict, research: str, log) -> dict:
+    """Second pass that rewrites only the opening chapter for a harder hook."""
+    log("  hook doctor: rewriting the first 30 seconds for maximum retention")
+    tmp = normalize_script(json.loads(json.dumps(script)), script.get("category", ""))
+
+    def check(d):
+        if not isinstance(d, dict) or not isinstance(d.get("scenes"), list) or not d["scenes"]:
+            raise ValueError("expected a chapter object with scenes")
+        validate_script({"chapters": [{"title": d.get("title") or "Hook", "scenes": d["scenes"]}]})
+
+    ch = claude_cli.ask_json(prompts.hook_doctor_prompt(tmp, research), validate=check, log=log)
+    ch["title"] = ch.get("title") or script["chapters"][0]["title"]
+    script["chapters"][0] = ch
+    first = ch["scenes"][0]
+    line = (first.get("shots") or [{}])[0].get("say") or first.get("narration", "")
+    log(f"  new opening line: {line}")
+    return script
 
 
 def stage_metadata(p: Project, log) -> None:
@@ -98,6 +126,30 @@ def stage_metadata(p: Project, log) -> None:
     log(f"  title: {meta['best_title']}")
 
 
+def shot_starts(shots: list[dict], sentences: list[dict], narration: str) -> list[float]:
+    """Map each shot's first word to a time in the scene audio (via sentence timings)."""
+    spans, cur = [], 0
+    for x in sentences:  # character span of every sentence inside the narration
+        i = narration.find(x["text"][:20], cur)
+        i = cur if i < 0 else i
+        spans.append((i, i + len(x["text"]), x["start"], x["end"]))
+        cur = i + len(x["text"])
+    out, off = [], 0
+    for sh in shots:
+        if not sh["say"]:
+            out.append(None)
+            continue
+        t = 0.0
+        for a, b, st, en in spans:
+            if off < b or (a, b, st, en) == spans[-1]:
+                frac = min(1.0, max(0.0, (off - a) / max(1, b - a)))
+                t = st + frac * (en - st)
+                break
+        out.append(t)
+        off += len(sh["say"]) + 1
+    return out
+
+
 def stage_voice(p: Project, log) -> None:
     v = load_config()["voice"]
     fps = load_config()["video"]["fps"]
@@ -106,7 +158,7 @@ def stage_voice(p: Project, log) -> None:
     adir.mkdir(exist_ok=True)
     timeline = {"scenes": [], "chapters": []}
     t = 0.0
-    lead = 0.15
+    lead = 0.1
     for s in scenes:
         wav = adir / f"scene_{s['index']:03d}.wav"
         sj = adir / f"scene_{s['index']:03d}.json"
@@ -122,21 +174,35 @@ def stage_voice(p: Project, log) -> None:
             audio, sentences = np.zeros(int(SR * 0.1), dtype=np.float32), []
             sf.write(str(wav), audio, SR, subtype="PCM_16")
             sj.write_text(json.dumps({"text": "", "sentences": []}), encoding="utf-8")
-        dur = len(audio) / SR
+        dur = len(audio) / SR if s["narration"].strip() else 0.0
+        shots = s["shots"]
+        # a leading silent title card gets a short beat before the voice starts
+        pre = 1.3 if shots[0]["visual"]["type"] == "title" and not shots[0]["say"] else 0.0
+        offset = lead + pre
         pause = v["pause_after_chapter"] if s["last_in_chapter"] else v["pause_after_scene"]
-        length = lead + dur + pause
-        kind = s["visual"]["type"]
-        if kind == "title":
-            length = max(length, 3.0)
+        length = offset + dur + pause
+        if shots[0]["visual"]["type"] == "title":
+            length = max(length, 1.8)
         if s["index"] == len(scenes) - 1:
             length = max(length, 20.0)  # YouTube end screen needs 5-20s
         frames = math.ceil(length * fps)
+        starts = shot_starts(shots, sentences, s["narration"])
+        shot_t, first_spoken = [], True
+        for st in starts:
+            if st is None:
+                shot_t.append(0.0 if not shot_t else shot_t[-1])
+            elif first_spoken:
+                shot_t.append(pre if pre else 0.0)
+                first_spoken = False
+            else:
+                shot_t.append(round(offset + st - 0.05, 3))
+        shot_t = [max(a, shot_t[i - 1] if i else 0.0) for i, a in enumerate(shot_t)]
         if s["first_in_chapter"]:
             timeline["chapters"].append({"title": s["chapter_title"], "start": round(t, 3)})
         timeline["scenes"].append({
-            "index": s["index"], "start": round(t, 4), "frames": frames, "voice_offset": lead,
-            "audio_seconds": round(dur, 3),
-            "sentences": [{**x, "start": x["start"] + lead, "end": x["end"] + lead} for x in sentences],
+            "index": s["index"], "start": round(t, 4), "frames": frames, "voice_offset": offset,
+            "audio_seconds": round(dur, 3), "shots": shot_t,
+            "sentences": [{**x, "start": x["start"] + offset, "end": x["end"] + offset} for x in sentences],
         })
         t += frames / fps
         if (s["index"] + 1) % 10 == 0:
@@ -144,35 +210,72 @@ def stage_voice(p: Project, log) -> None:
     timeline["total_seconds"] = round(t, 3)
     p.write_json("timeline.json", timeline)
     mins = t / 60
-    log(f"  narration done: video length {int(mins)}:{int(t % 60):02d}")
+    n = sum(len(x["shots"]) for x in timeline["scenes"])
+    log(f"  narration done: video length {int(mins)}:{int(t % 60):02d}, {n} shots (a cut every {t / max(1, n):.1f}s on average)")
     if mins < load_config()["script"]["min_video_minutes"]:
         log(f"  !! WARNING: video is under {load_config()['script']['min_video_minutes']} minutes. Re-run the script stage to expand it.")
 
 
+def shot_image_path(p: Project, scene: int, shot: int, side: str = "") -> Path | None:
+    for ext in ("png", "jpg"):
+        f = p.path("images", f"s{scene:03d}_{shot:02d}{side}.{ext}")
+        if f.exists():
+            return f
+    return None
+
+
 def stage_visuals(p: Project, log) -> None:
     cfg = load_config()["images"]
-    scenes = p.scenes()
+    script = p.read_json("script.json")
     idir = p.path("images")
     idir.mkdir(exist_ok=True)
     credits = p.read_json("credits.json", {}) or {}
-    backend = cfg["backend"]
-    need = [s for s in scenes if s["visual"]["type"] in ("illustration", "archive")]
-    log(f"  {len(need)} scenes need images (AI backend: {backend}, Wikimedia: {cfg['wikimedia']})")
-    for k, s in enumerate(need, 1):
-        i, v = s["index"], s["visual"]
-        if any(idir.glob(f"scene_{i:03d}.*")):
+    budget = int(cfg.get("max_images", 150))
+
+    # enforce the image budget: turn surplus illustrations into free closeups of the previous image
+    used, changed, idx = 0, False, 0
+    for ch in script["chapters"]:
+        for sc in ch["scenes"]:
+            for j, sh in enumerate(sc["shots"]):
+                vt = sh["visual"]["type"]
+                if vt in IMAGE_TYPES:
+                    cost = 2 if vt == "split" else 1
+                    if used + cost > budget and vt == "illustration" and used > 0:
+                        sh["visual"] = {"type": "closeup", "focus": ("left", "right", "center", "top")[j % 4], "camera": "zoom_in"}
+                        changed = True
+                    else:
+                        used += cost
+            idx += 1
+    if changed:
+        p.write_json("script.json", script)
+        log(f"  image budget ({budget}) reached - extra shots became closeups")
+
+    jobs = []  # (scene, shot, side, visual, prompt)
+    for s in p.scenes():
+        for j, sh in enumerate(s["shots"]):
+            v = sh["visual"]
+            if v["type"] in ("illustration", "archive"):
+                jobs.append((s["index"], j, "", v, v.get("prompt") or sh["say"]))
+            elif v["type"] == "split":
+                jobs.append((s["index"], j, "a", v, v["left"]["prompt"]))
+                jobs.append((s["index"], j, "b", v, v["right"]["prompt"]))
+    log(f"  {len(jobs)} images needed (AI backend: {cfg['backend']}, Wikimedia: {cfg['wikimedia']})")
+    for k, (i, j, side, v, prompt) in enumerate(jobs, 1):
+        if shot_image_path(p, i, j, side):
             continue
+        key = f"{i}:{j}{side}"
         if v["type"] == "archive" and cfg["wikimedia"]:
-            c = fetch_wikimedia(v.get("query", ""), idir / f"scene_{i:03d}.jpg")
+            c = fetch_wikimedia(v.get("query", ""), idir / f"s{i:03d}_{j:02d}.jpg")
             if c:
-                credits[str(i)] = c
+                credits[key] = c
                 p.write_json("credits.json", credits)
-                log(f"  [{k}/{len(need)}] archive: {c['title']}")
+                log(f"  [{k}/{len(jobs)}] archive: {c['title']}")
                 continue
-            log(f"  [{k}/{len(need)}] no free archive image for '{v.get('query')}', illustrating instead")
+            log(f"  [{k}/{len(jobs)}] no free archive image for '{v.get('query')}', illustrating instead")
         try:
-            if generate_image(v.get("prompt", s["narration"]), idir / f"scene_{i:03d}.png", seed=1000 + i + 7919 * int(v.get("seed_bump", 0))):
-                log(f"  [{k}/{len(need)}] illustrated scene {i}")
+            seed = 1000 + i * 37 + j * 7 + (13 if side == "b" else 0) + 7919 * int(v.get("seed_bump", 0))
+            if generate_image(prompt, idir / f"s{i:03d}_{j:02d}{side}.png", seed=seed):
+                log(f"  [{k}/{len(jobs)}] illustrated scene {i} shot {j}{side}")
         except ImageGenError as e:
             raise ImageGenError(f"{e}\n\nTip: set images.backend to 'none' in config.yaml to render with built-in art instead.") from e
 
@@ -184,13 +287,15 @@ def stage_storyboard(p: Project, log) -> None:
     scenes, tl = p.scenes(), p.read_json("timeline.json")
     rows = []
     for s, t in zip(scenes, tl["scenes"]):
-        mm, ss = divmod(int(t["start"]), 60)
-        v = s["visual"]
-        detail = v.get("prompt") or v.get("query") or v.get("text") or v.get("line") or v.get("label") or v.get("heading") or ""
-        rows.append(
-            f"<div class=card><img src='storyboard/scene_{s['index']:03d}.jpg'><div><b>#{s['index']} {mm}:{ss:02d} - {v['type']}</b>"
-            f" <i>{s['chapter_title']}</i><p>{s['narration']}</p><small>{detail}</small></div></div>"
-        )
+        for j, sh in enumerate(s["shots"]):
+            st = t["start"] + t["shots"][j]
+            mm, ss = divmod(int(st), 60)
+            v = sh["visual"]
+            detail = v.get("prompt") or v.get("query") or v.get("text") or v.get("line") or v.get("label") or v.get("heading") or ""
+            rows.append(
+                f"<div class=card><img src='storyboard/scene_{s['index']:03d}_{j:02d}.jpg'><div><b>#{s['index']}.{j} {mm}:{ss:02d} - {v['type']}</b>"
+                f" <i>{s['chapter_title']}</i><p>{sh['say']}</p><small>{detail}</small></div></div>"
+            )
     html = ("<html><head><meta charset=utf-8><title>Storyboard</title><style>body{font-family:sans-serif;background:#0f1b3d;color:#fff}"
             ".card{display:flex;gap:16px;margin:10px;background:#1c2f66;padding:10px;border-radius:12px}img{width:320px;border-radius:8px}"
             "small{color:#9fb3e8}</style></head><body>" + "".join(rows) + "</body></html>")
@@ -231,7 +336,7 @@ def stage_thumbnails(p: Project, log) -> None:
                     log(f"  thumbnail bg generation failed ({e}); using built-in art")
             if bg is None:
                 # reuse the most striking scene image if any
-                imgs = sorted(p.path("images").glob("scene_*.*"))
+                imgs = sorted(p.path("images").glob("s[0-9]*_*.*"))
                 if imgs:
                     bg = Image.open(imgs[min(len(imgs) - 1, n * 3)]).convert("RGB")
         paths.append(make_thumbnail(c, bg, p.theme, out_dir / f"thumbnail_{n}.jpg"))

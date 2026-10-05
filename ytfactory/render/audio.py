@@ -134,6 +134,15 @@ def pop(sr: int = MIX_SR) -> np.ndarray:
     return (0.4 * np.sin(2 * np.pi * np.cumsum(f) / sr) * np.exp(-t * 40)).astype(np.float32)
 
 
+def impact(sr: int = MIX_SR) -> np.ndarray:
+    n = int(0.35 * sr)
+    t = np.arange(n) / sr
+    f = np.linspace(120, 45, n)
+    thump = np.sin(2 * np.pi * np.cumsum(f) / sr) * np.exp(-t * 9)
+    noise = np.random.default_rng(3).normal(0, 1, n) * np.exp(-t * 30) * 0.3
+    return (0.7 * thump + noise).astype(np.float32)
+
+
 def upsample(a: np.ndarray, src: int, dst: int = MIX_SR) -> np.ndarray:
     if src == dst:
         return a
@@ -161,7 +170,7 @@ def build_mix(narration: np.ndarray, narr_sr: int, sfx_events: list[tuple[float,
     m[:f] *= np.linspace(0, 1, f)
     m[-f:] *= np.linspace(1, 0, f)
     mix = voice + m * duck.astype(np.float32) * gain
-    sounds = {"whoosh": whoosh() * 0.6, "pop": pop() * 0.5}
+    sounds = {"whoosh": whoosh() * 0.45, "pop": pop() * 0.35, "impact": impact() * 0.5}
     for t, kind in sfx_events:
         s = sounds.get(kind)
         st = int(t * MIX_SR)
