@@ -27,7 +27,7 @@ DEFAULTS: dict = {
         "description_footer": "",
     },
     "claude": {"command": "claude", "model": "", "web_research": True, "timeout_minutes": 20},
-    "script": {"target_words": 2000, "min_words": 1750, "min_video_minutes": 10, "hook_doctor": True},
+    "script": {"target_words": 2300, "min_words": 1750, "min_video_minutes": 10, "hook_doctor": True},
     "voice": {
         "engine": "kokoro",
         "kokoro_voice": "am_michael",

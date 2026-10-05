@@ -22,7 +22,7 @@ claude:
   timeout_minutes: 20
 
 script:
-  target_words: 2000       # ~12-13 min at Zib's speaking pace
+  target_words: 2300       # asked of Claude; first drafts tend to come in short, final scripts land ~1900-2300 (11-14 min)
   min_words: 1750
   min_video_minutes: 10
   hook_doctor: true        # extra Claude pass that rewrites the first 30s for a harder hook
