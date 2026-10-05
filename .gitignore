@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.cache/
+models/
+tools/
+projects/
+voice_samples/
+test_image.png
+*.part

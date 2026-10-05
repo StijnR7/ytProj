@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Probe Into It Studio</title>
+<style>
+:root{--bg:#0b1430;--panel:#13214a;--panel2:#1a2c60;--line:#2a3f7a;--text:#eef2ff;--muted:#9fb0dd;--orange:#ff7a30;--teal:#2ec4b6;--yellow:#ffd23f;--red:#ff5d6c}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh}
+aside{width:320px;background:var(--panel);border-right:1px solid var(--line);padding:18px;overflow:auto;height:100vh;position:sticky;top:0;flex-shrink:0}
+main{flex:1;padding:24px;max-width:1300px;min-width:0}
+h1{font-size:20px;margin:0}h2{font-size:16px;margin:22px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+h3{margin:0 0 10px}
+.brand{display:flex;gap:12px;align-items:center}.brand img{width:56px;height:56px;border-radius:50%;background:var(--panel2)}
+.small{font-size:12px;color:var(--muted)}
+button{background:var(--orange);color:#fff;border:0;border-radius:10px;padding:8px 14px;font-weight:700;cursor:pointer;font-size:14px}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+button.teal{background:var(--teal)}
+button:disabled{opacity:.45;cursor:not-allowed}
+input,select,textarea{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;width:100%}
+.item{padding:8px 10px;border-radius:8px;cursor:pointer;margin:2px 0;font-size:14px}
+.item:hover,.item.active{background:var(--panel2)}
+.item .cat{font-size:11px;color:var(--teal);text-transform:uppercase}
+.idea.used{opacity:.45}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.stages{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}
+.stage{padding:6px 10px;border-radius:999px;font-size:12px;background:var(--panel2);border:1px solid var(--line);cursor:pointer}
+.stage.done{background:#174d48;border-color:var(--teal)}.stage.running{background:#5a3a12;border-color:var(--orange)}
+.stage.error{background:#5a1a24;border-color:var(--red)}.stage.stale{border-style:dashed;border-color:var(--yellow)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
+.tabs{display:flex;gap:4px;margin-top:16px}.tab{padding:8px 14px;border-radius:10px 10px 0 0;cursor:pointer;background:var(--panel);color:var(--muted)}
+.tab.active{background:var(--panel2);color:var(--text)}
+.tabbody{background:var(--panel2);border-radius:0 14px 14px 14px;padding:16px}
+.sb{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.scene{background:var(--panel);border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+.scene img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#000}
+.scene .b{padding:10px;font-size:13px}.scene .t{color:var(--teal);font-weight:700;font-size:12px}
+.scene .n{margin:6px 0;line-height:1.4}.scene .v{color:var(--muted);font-size:12px}
+pre.log{background:#050a1c;padding:12px;border-radius:10px;max-height:260px;overflow:auto;font-size:12px;white-space:pre-wrap}
+textarea.code{font-family:ui-monospace,Consolas,monospace;font-size:12px;height:60vh}
+.copy{position:relative}.copy button{position:absolute;right:8px;top:8px;padding:4px 10px;font-size:12px}
+.copy textarea{min-height:60px}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}.thumbs img{width:100%;border-radius:10px}
+video{width:100%;border-radius:12px;background:#000}
+.banner{background:#5a3a12;border:1px solid var(--orange);padding:10px 14px;border-radius:10px;margin-bottom:12px}
+.err{background:#5a1a24;border-color:var(--red)}
+.md{white-space:pre-wrap;font-size:13px;line-height:1.5;max-height:65vh;overflow:auto}
+.empty{color:var(--muted);text-align:center;padding:60px}
+@media (max-width:800px){body{flex-direction:column}aside{width:100%;height:auto;position:static}}
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand"><img id="pp" alt=""><div><h1 id="chname">Probe Into It</h1><div class="small" id="chtag"></div></div></div>
+  <div class="row" style="margin-top:12px"><button class="ghost" onclick="branding()">Channel art</button></div>
+
+  <h2>New video</h2>
+  <input id="topic" placeholder="Topic, e.g. Why octopuses are basically aliens">
+  <div class="row" style="margin-top:6px">
+    <select id="cat" style="flex:1"></select>
+    <button onclick="newProject()">Create</button>
+  </div>
+
+  <h2>Videos</h2>
+  <div id="projects"></div>
+
+  <h2>Idea backlog</h2>
+  <button class="teal" onclick="genIdeas()">Brainstorm 12 ideas</button>
+  <div id="ideas" style="margin-top:8px"></div>
+</aside>
+
+<main>
+  <div id="job"></div>
+  <div id="view"><div class="empty">Pick a video on the left, create one from a topic, or brainstorm ideas.</div></div>
+</main>
+
+<script>
+let S = null, cur = null, tab = 'storyboard', P = null;
+const $ = s => document.querySelector(s);
+const api = (u, body) => fetch(u, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).then(r => r.json());
+const esc = s => (s ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = s => s == null ? '' : `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+
+async function refresh() {
+  S = await api('/api/state');
+  $('#chname').textContent = S.channel.name;
+  $('#chtag').textContent = `${S.channel.handle} · ${S.channel.tagline}`;
+  $('#pp').src = S.has_branding ? '/channel/profile_picture.png?' + Date.now() % 100000 : '';
+  if (!$('#cat').options.length) $('#cat').innerHTML = S.channel.categories.map(c => `<option>${c}</option>`).join('');
+  $('#projects').innerHTML = S.projects.map(p => {
+    const done = S.stages.filter(s => p.stages[s] === 'done').length;
+    return `<div class="item ${p.slug===cur?'active':''}" onclick="openProject('${p.slug}')"><div class="cat">${esc(p.category)} · ${done}/${S.stages.length}</div>${esc(p.topic)}</div>`;
+  }).join('') || '<div class="small">No videos yet.</div>';
+  $('#ideas').innerHTML = S.ideas.map((i, n) => `<div class="item idea ${i.used?'used':''}" title="${esc(i.angle)}">
+     <div class="cat">${esc(i.category)}</div>${esc(i.title)}
+     ${i.used ? '' : `<div style="margin-top:4px"><button class="ghost" style="padding:3px 8px;font-size:12px" onclick="fromIdea(${n})">Make this</button></div>`}</div>`).reverse().join('') || '<div class="small">No ideas yet.</div>';
+  const j = S.job;
+  $('#job').innerHTML = j.running ? `<div class="banner">Working: ${esc(j.label)}… (you can keep browsing)</div>`
+    : j.error ? `<div class="banner err">Last job failed: ${esc(j.error)}</div>` : '';
+  document.querySelectorAll('[data-needs-idle]').forEach(b => b.disabled = j.running);
+}
+
+async function openProject(slug) { cur = slug; await loadProject(); refresh(); }
+
+async function loadProject(keepScroll) {
+  if (!cur) return;
+  P = await api('/api/projects/' + cur);
+  render();
+}
+
+function stagePill(s) {
+  const st = P.meta.stages[s] || 'pending';
+  return `<span class="stage ${st}" title="Re-run from ${s}" onclick="runFrom('${s}')">${s}${st==='stale'?' (stale)':''}</span>`;
+}
+
+function render() {
+  const m = P.meta;
+  const busy = S && S.job.running;
+  const f = n => `/files/${cur}/${n}?v=${Date.now()%100000}`;
+  let body = '';
+  if (tab === 'storyboard') {
+    body = P.scenes.length ? `<div class="small" style="margin-bottom:10px">${P.scenes.length} scenes · ${P.words} words${P.length ? ' · ' + fmt(P.length) : ''}. Click 🎲 to re-roll an image.</div><div class="sb">` +
+      P.scenes.map(s => `<div class="scene"><img src="${s.preview ? f(s.preview) : (s.image ? f(s.image) : '')}" alt="">
+        <div class="b"><div class="t">#${s.index} ${s.start!=null?fmt(s.start):''} · ${esc(s.visual.type)} · ${esc(s.chapter)}</div>
+        <div class="n">${esc(s.narration)}</div>
+        <div class="v">${esc(s.visual.prompt || s.visual.query || s.visual.text || s.visual.line || s.visual.label || s.visual.heading || '')}</div>
+        ${['illustration','archive'].includes(s.visual.type) ? `<div class="row" style="margin-top:6px"><button class="ghost" data-needs-idle onclick="reroll(${s.index})">🎲 re-roll</button><button class="ghost" data-needs-idle onclick="reprompt(${s.index})">✎ new prompt</button></div>` : ''}
+        </div></div>`).join('') + '</div>' : '<div class="empty">No script yet - run the pipeline.</div>';
+  } else if (tab === 'script') {
+    body = P.script ? `<div class="small">Edit narration, visuals, mascot reactions… then save. Only changed scenes get re-voiced/re-rendered.</div>
+      <textarea class="code" id="scriptbox">${esc(JSON.stringify(P.script, null, 2))}</textarea>
+      <div class="row" style="margin-top:8px"><button onclick="saveScript()">Save script</button><span id="savemsg" class="small"></span></div>` : '<div class="empty">No script yet.</div>';
+  } else if (tab === 'research') {
+    body = P.research ? `<div class="md">${esc(P.research)}</div>` : '<div class="empty">No research yet.</div>';
+  } else if (tab === 'publish') {
+    const has = n => P.files.includes(n);
+    body = (has('video.mp4') ? `<video controls src="${f('output/video.mp4')}"></video>` : '<div class="empty">Video not rendered yet.</div>') +
+      (has('thumbnail_1.jpg') ? `<h3 style="margin-top:16px">Thumbnails</h3><div class="thumbs">${[1,2,3].filter(n=>has(`thumbnail_${n}.jpg`)).map(n=>`<a href="${f('output/thumbnail_'+n+'.jpg')}" download><img src="${f('output/thumbnail_'+n+'.jpg')}"></a>`).join('')}</div>` : '') +
+      Object.entries(P.texts).map(([k, v]) => `<h3 style="margin-top:16px">${k}</h3><div class="copy"><textarea rows="${Math.min(18, v.split('\n').length+1)}">${esc(v)}</textarea><button onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Copied!'">Copy</button></div>`).join('') +
+      (has('captions.srt') ? `<p><a style="color:var(--teal)" href="${f('output/captions.srt')}" download>Download captions.srt</a> · <a style="color:var(--teal)" href="${f('output/UPLOAD_CHECKLIST.md')}" target="_blank">Upload checklist</a></p>` : '');
+  } else if (tab === 'log') {
+    body = `<pre class="log">${esc(P.log)}</pre>`;
+  }
+  $('#view').innerHTML = `
+    <div class="card">
+      <div class="small">${esc(m.category)} · created ${esc(m.created)}</div>
+      <h3 style="font-size:22px;margin-top:4px">${esc(m.topic)}</h3>
+      <div class="stages">${S.stages.map(stagePill).join('')}</div>
+      <div class="row">
+        <button data-needs-idle ${busy?'disabled':''} onclick="run(null,'storyboard')">① Write + storyboard</button>
+        <button data-needs-idle ${busy?'disabled':''} class="teal" onclick="run('render', null)">② Render video + package</button>
+        <button data-needs-idle ${busy?'disabled':''} class="ghost" onclick="run(null, null)">Run everything</button>
+      </div>
+      <div class="small" style="margin-top:8px">Tip: do ①, review the storyboard &amp; script, then ②. Click any stage pill to re-run from there.</div>
+      <pre class="log" style="margin-top:12px;max-height:140px" id="minilog">${esc(P.log.split('\n').slice(-12).join('\n'))}</pre>
+    </div>
+    <div class="tabs">${['storyboard','script','research','publish','log'].map(t => `<div class="tab ${t===tab?'active':''}" onclick="tab='${t}';render()">${t}</div>`).join('')}</div>
+    <div class="tabbody">${body}</div>`;
+}
+
+async function run(start, stop, force=false) { const r = await api(`/api/projects/${cur}/run`, {start, stop, force}); if (!r.ok) alert('Another job is running.'); refresh(); }
+async function runFrom(s) { if (confirm(`Re-run from "${s}"? (later stages will be redone as needed)`)) run(s, null, false); }
+async function newProject() { const t = $('#topic').value.trim(); if (!t) return; const r = await api('/api/projects', {topic:t, category:$('#cat').value}); $('#topic').value=''; openProject(r.slug); }
+async function fromIdea(n) { const r = await api('/api/projects', {idea:n}); openProject(r.slug); }
+async function genIdeas() { const r = await api('/api/ideas/generate', {n:12}); if (!r.ok) alert('Another job is running.'); refresh(); }
+async function branding() { await api('/api/branding', {}); setTimeout(refresh, 4000); }
+async function reroll(i) { await api(`/api/projects/${cur}/scene/${i}/reroll`, {}); refresh(); }
+async function reprompt(i) { const s = P.scenes.find(x => x.index === i); const p = prompt('New image prompt:', s.visual.prompt || ''); if (p) { await api(`/api/projects/${cur}/scene/${i}/reroll`, {prompt:p}); refresh(); } }
+async function saveScript() {
+  const r = await fetch(`/api/projects/${cur}/script`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({script:$('#scriptbox').value})}).then(r=>r.json());
+  $('#savemsg').textContent = r.error ? 'Error: ' + r.error : `Saved (${r.words} words). Now click ② or re-run from "voice".`;
+  if (!r.error) loadProject();
+}
+
+let wasRunning = false;
+setInterval(async () => {
+  await refresh();
+  if (cur && (S.job.running || wasRunning)) {
+    if (S.job.running && S.job.slug === cur) {
+      const p = await api('/api/projects/' + cur); P = p;
+      const ml = $('#minilog'); if (ml) { ml.textContent = P.log.split('\n').slice(-12).join('\n'); ml.scrollTop = ml.scrollHeight; }
+      document.querySelectorAll('.stage').forEach((el, i) => { const st = P.meta.stages[S.stages[i]] || 'pending'; el.className = 'stage ' + st; });
+    } else if (!S.job.running) { loadProject(); }
+  }
+  wasRunning = S.job.running;
+}, 2500);
+refresh();
+</script>
+</body>
+</html>

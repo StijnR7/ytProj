@@ -1,0 +1,77 @@
+# ============================================================
+#  Probe Into It - video factory settings
+#  Edit freely. Paths are relative to this folder.
+# ============================================================
+
+channel:
+  name: "Probe Into It"
+  handle: "@ProbeIntoIt"
+  tagline: "Every rabbit hole, fully explored."
+  mascot_name: "Zib"
+  # Topic pillars the idea generator rotates through.
+  categories: [history, space, animals, hypotheticals]
+  # Appended to every description.
+  description_footer: |
+    Narrated by Zib, the tiny probe that pokes into every rabbit hole.
+    New deep dives every week - subscribe so Zib can find you.
+
+claude:
+  command: claude          # the Claude Code CLI (uses your Claude subscription)
+  model: ""                # "", "opus" or "sonnet". Empty = CLI default
+  web_research: true       # let Claude use web search during the research stage
+  timeout_minutes: 20
+
+script:
+  target_words: 2000       # ~12-13 min at Zib's speaking pace
+  min_words: 1750
+  min_video_minutes: 10
+
+voice:
+  engine: kokoro           # kokoro (local, free) | edge (free online MS voices) | dummy (testing)
+  kokoro_voice: am_michael # try: python -m ytfactory voices
+  speed: 1.0
+  edge_voice: en-US-AndrewNeural
+  pause_after_scene: 0.35  # seconds of breathing room between scenes
+  pause_after_chapter: 0.8
+
+images:
+  backend: sdcpp           # sdcpp (stable-diffusion.cpp, Vulkan = AMD friendly) | comfyui | none
+  width: 1344
+  height: 768
+  style: >-
+    flat 2D vector illustration, bold simple shapes, smooth gradients, subtle grain texture,
+    vibrant harmonious colors, soft rim lighting, clean composition, high detail, no text
+  negative: >-
+    text, letters, words, watermark, signature, logo, blurry, lowres, jpeg artifacts,
+    deformed, extra limbs, photo, photorealistic
+  sdcpp:
+    exe: tools/sd/sd.exe          # auto-detected by setup (sd.exe or sd-cli.exe)
+    model: models/sd_xl_base_1.0.safetensors
+    vae: models/sdxl_vae_fp16_fix.safetensors
+    lora_dir: models/lora
+    lora: sdxl_lightning_8step_lora   # set "" to disable
+    steps: 8
+    cfg: 1.0
+    sampler: euler
+    extra_args: ["--vae-tiling"]
+  comfyui:
+    url: http://127.0.0.1:8188
+    checkpoint: sd_xl_base_1.0.safetensors
+    steps: 25
+    cfg: 6.0
+    sampler: dpmpp_2m
+    scheduler: karras
+  wikimedia: true          # fetch real public-domain / CC images for archive scenes (kings, paintings, NASA photos)
+
+video:
+  width: 1920
+  height: 1080
+  fps: 30
+  crf: 20
+  preset: veryfast
+  workers: 0               # 0 = auto (half your CPU threads)
+  burn_captions: false     # captions are always exported as .srt for upload
+
+music:
+  folder: assets/music     # drop royalty-free tracks here (e.g. YouTube Audio Library). Empty = Zib composes ambient music
+  volume_db: -20
