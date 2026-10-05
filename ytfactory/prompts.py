@@ -55,16 +55,24 @@ SHOW, DON'T JUST TELL (visual pacing)
 """
 
 SCENE_TYPES_DOC = """SHOT VISUAL TYPES (each shot has exactly one "visual"):
-- {"type":"illustration","prompt":"...","camera":"zoom_in|zoom_out|pan_left|pan_right|pan_up|pan_down"}
-    A NEW AI-generated flat illustration. "prompt" = concrete visual description for an image model: subject, action,
-    setting, composition, lighting, 15-40 words. Never ask for text/letters. Don't name real living people.
-    Describe recurring characters/places identically every time so they look consistent.
+- {"type":"broll","query":"mantis shrimp coral reef","prefer":"video|photo|any","prompt":"...","camera":"zoom_in|pan_left|..."}
+    THE DEFAULT. Real stock footage or a real photo (Pexels, Pixabay, Openverse, Wikimedia, NASA), picked by a picture editor.
+    Use it for everything that exists in reality: animals, places, nature, space, objects, machines, people doing
+    generic things, cities, weather, lab work... "query" = 2-4 concrete, literal, visual words that a stock site would
+    have ("mantis shrimp", "coral reef underwater", "bullet slow motion", "scientist microscope", "night sky stars").
+    No abstract ideas, no names of specific people, no years. "prefer":"video" for anything moving (default "any").
+    "prompt" = an illustration description used only if no good footage exists.
+- {"type":"illustration","prompt":"...","query":"...","camera":"zoom_in|zoom_out|pan_left|pan_right|pan_up|pan_down"}
+    An AI-painted image. ONLY for things no camera could ever capture: hypothetical scenarios, the far future,
+    prehistoric scenes, historical events with no surviving pictures, impossible viewpoints. Max ~10% of shots.
+    "prompt" = concrete visual description: subject, action, setting, composition, lighting, 15-40 words; never text;
+    no real living people. Describe recurring characters/places identically every time. "query" = stock fallback words.
 - {"type":"closeup","focus":"center|left|right|top|bottom","camera":"zoom_in|pan_left|..."}
     FREE extra cut: a tight, moving closeup on the PREVIOUS image (detail shot). Use it to add cuts without a new image.
 - {"type":"kinetic","text":"BULLET SPEED"}  Big animated words slam onto the screen (max 5 words). Great for punchlines,
     shocking numbers and key terms. Also free.
-- {"type":"split","left":{"prompt":"...","label":"Human"},"right":{"prompt":"...","label":"Mantis shrimp"}}  Two images side by side
-    for versus / before-after / then-now.
+- {"type":"split","left":{"query":"human fist","prompt":"...","label":"Human"},"right":{"query":"mantis shrimp","prompt":"...","label":"Mantis shrimp"}}
+    Two real photos side by side for versus / before-after / then-now ("query" = stock search words, "prompt" = fallback).
 - {"type":"archive","query":"...","caption":"...","prompt":"..."}  A REAL public-domain/CC image from Wikimedia Commons:
     famous portraits, paintings, maps, artifacts, NASA photos, real animal photos. "query" = precise Commons search terms
     ("Mehmed II portrait Bellini", "Hubble Pillars of Creation", "Odontodactylus scyllarus"). "caption" = museum label.
@@ -160,8 +168,9 @@ SCENES AND SHOTS
 - A scene is one paragraph (20-60 words). It is split into SHOTS: each shot is the exact words spoken during it ("say")
   plus the visual on screen while they are spoken. Shots are 4-14 words (1.5-5 seconds); in the hook 3-8 words.
   Joined together, the "say" texts of a scene form its narration - split at natural phrase boundaries.
-- Budget images: a NEW illustration/archive/split roughly every 6-10 seconds; in between, use closeups, kinetic text,
-  stats and other graphics for extra cuts. About 2-4 shots per scene on average.
+- Visual sourcing: real footage first. Roughly 55-65% of shots should be broll (real video/photos) or archive,
+  at most ~10% AI illustrations, the rest closeups, kinetic text, graphics and Zib. A new broll/archive shot roughly
+  every 4-8 seconds. About 2-4 shots per scene on average.
 - Narration is spoken by a text-to-speech voice: write it exactly as SPOKEN. Numbers and years in words where
   pronunciation matters ("fourteen fifty-three"), no abbreviations, symbols, parentheses, stage directions or emojis.
   (Graphics like stat/timeline/kinetic may use digits.)
@@ -256,7 +265,8 @@ Return ONLY JSON in a ```json block:
  "tags": ["15-25 search tags, most specific first"],
  "thumbnails": [
    {{"text": "2-4 WORDS that complement (not repeat) the title", "highlight": "the one word to color yellow",
-     "prompt": "illustration prompt for the background: one striking subject, high contrast, dramatic, simple",
+     "query": "2-4 word stock photo search for a striking background image (e.g. 'mantis shrimp closeup')",
+     "prompt": "illustration prompt for the background if no photo fits: one striking subject, high contrast, dramatic, simple",
      "archive_query": "optional Wikimedia Commons search if a real image would be stronger, else empty",
      "mascot": "surprised|excited|worried|thinking|pointing", "layout": "left|right|center"}}
  ],

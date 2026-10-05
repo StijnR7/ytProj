@@ -102,6 +102,7 @@ def test_every_scene_renders(kind):
         "quote": {"text": "To be or not.", "author": "Someone"},
         "mascot": {"line": "Hi!"},
         "closeup": {"focus": "left", "camera": "zoom_in"},
+        "broll": {"query": "reef", "prefer": "any", "camera": "pan_left"},
         "kinetic": {"text": "10,000 TIMES GRAVITY"},
         "split": {"left": {"prompt": "a", "label": "Before"}, "right": {"prompt": "b", "label": "After"}},
     }

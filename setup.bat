@@ -21,12 +21,18 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
 echo.
-choice /M "Download local AI image generation (stable-diffusion.cpp Vulkan + SDXL, ~7.5 GB, recommended for your GPU)"
+choice /M "Download local AI image generation (stable-diffusion.cpp Vulkan + FLUX.1-schnell, ~17 GB) for shots with no real footage"
 if errorlevel 2 (
   python -m ytfactory setup
 ) else (
   python -m ytfactory setup --images
 )
+
+echo.
+echo Real stock footage is the main source of visuals. Get two free keys (no credit card):
+echo   Pexels:  https://www.pexels.com/api/
+echo   Pixabay: https://pixabay.com/api/docs/
+python -m ytfactory keys
 
 python -m ytfactory branding
 python -m ytfactory check

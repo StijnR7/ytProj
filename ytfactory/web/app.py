@@ -150,8 +150,9 @@ def reroll(slug, idx, shot):
     for f in p.path("images").glob(f"s{idx:03d}_{shot:02d}*.*"):
         f.unlink()
     credits = p.read_json("credits.json", {}) or {}
-    for k in [k for k in credits if k.startswith(f"{idx}:{shot}")]:
-        credits.pop(k)
+    rejected = []
+    for k in [k for k in credits if k == f"{idx}:{shot}" or k in (f"{idx}:{shot}a", f"{idx}:{shot}b")]:
+        rejected.append(credits.pop(k).get("source_id"))
     p.write_json("credits.json", credits)
     script = p.read_json("script.json")
     k = 0
@@ -160,10 +161,14 @@ def reroll(slug, idx, shot):
             if k == idx and shot < len(sc["shots"]):
                 v = sc["shots"][shot]["visual"]
                 v["seed_bump"] = int(v.get("seed_bump", 0)) + 1
+                v["reject"] = list(dict.fromkeys(v.get("reject", []) + [r for r in rejected if r]))  # stock: pick something else
                 new_prompt = (request.json or {}).get("prompt")
                 if new_prompt:
-                    if v["type"] == "closeup" or v["type"] == "kinetic":  # upgrade to a real illustration
-                        sc["shots"][shot]["visual"] = v = {"type": "illustration", "prompt": new_prompt, "camera": "zoom_in", "seed_bump": v["seed_bump"]}
+                    if v["type"] in ("closeup", "kinetic"):  # upgrade to real footage
+                        sc["shots"][shot]["visual"] = v = {"type": "broll", "query": new_prompt[:80], "prompt": new_prompt, "prefer": "any",
+                                                           "camera": "zoom_in", "seed_bump": v["seed_bump"], "reject": v.get("reject", [])}
+                    elif v["type"] == "broll":
+                        v["query"] = new_prompt[:80]
                     else:
                         v["prompt"] = new_prompt
             k += 1

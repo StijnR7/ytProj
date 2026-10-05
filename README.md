@@ -10,8 +10,9 @@ description, chapters, tags and captions, all narrated by **Zib**, the channel's
 |---|---|---|
 | Ideas, research (with web search), script, storyboard, titles, description, tags | Claude Code CLI (`claude -p`) on your **subscription login** | included |
 | Narration voice | [Kokoro](https://github.com/thewh1teagle/kokoro-onnx), open-source TTS, runs on CPU | free |
-| Illustrations | [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) **Vulkan** build + SDXL + Lightning LoRA, on your RX 6700 XT | free |
-| Real images (kings, paintings, NASA photos, animals) | Wikimedia Commons (public domain / CC, credits auto-added) | free |
+| **Main visuals: real stock video + photos** | [Pexels](https://www.pexels.com/api/) + [Pixabay](https://pixabay.com/api/docs/) (free keys), Openverse, Wikimedia Commons, NASA; **Claude picks the best match** for every shot | free |
+| Historical images (kings, paintings, maps) | Wikimedia Commons (public domain / CC, credits auto-added) | free |
+| AI paintings (only for things no camera could film) | [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) **Vulkan** + **FLUX.1-schnell**, on your RX 6700 XT | free |
 | Animation, motion graphics, mascot, thumbnails | Built-in Python renderer (Pillow + FFmpeg) | free |
 | Music | Your tracks from the YouTube Audio Library, or Zib's built-in ambient composer | free |
 
@@ -25,9 +26,12 @@ description, chapters, tags and captions, all narrated by **Zib**, the channel's
 2. **Claude Code**: open PowerShell and run `irm https://claude.ai/install.ps1 | iex`, then run `claude` once and
    log in with your Claude account (Pro/Max).
 3. **AMD driver**: make sure your Radeon driver is up to date (Vulkan support is built in).
-4. Double-click **`setup.bat`**. It creates a virtual environment, installs packages, downloads the voice model and
-   (if you say yes) stable-diffusion.cpp + SDXL (~7.5 GB). Then it creates the channel art and runs a self-check.
-5. Double-click **`start.bat`**. The studio opens in your browser at http://127.0.0.1:7860
+4. Get two **free stock footage keys** (2 minutes each, no credit card): [Pexels](https://www.pexels.com/api/) and
+   [Pixabay](https://pixabay.com/api/docs/).
+5. Double-click **`setup.bat`**. It creates a virtual environment, installs packages, downloads the voice model and
+   (if you say yes) stable-diffusion.cpp + FLUX (~17 GB), then asks for your two keys, creates the channel art and runs
+   a self-check.
+6. Double-click **`start.bat`**. The studio opens in your browser at http://127.0.0.1:7860
 
 Check the GPU image setup at any time with:
 ```
@@ -72,7 +76,8 @@ python -m ytfactory branding                # regenerate channel art
   - If the script comes out too short, Claude is asked to expand it automatically, so videos land over 10 minutes.
 - **Shot-by-shot storyboard**: every paragraph is cut into **shots of 1.5-5 s**, and each shot shows what is being said
   at that moment. Shot types:
-  - AI illustration (strong pan/zoom with floating particles)
+  - **b-roll**: real stock video clips or photos, picked by Claude for each shot (most of the video)
+  - AI painting, only for hypotheticals, prehistory and the like (strong pan/zoom with floating particles)
   - **closeup** (a free extra cut on a detail of the previous image)
   - **kinetic text** (big words slam onto the screen)
   - **split-screen VS**
@@ -92,20 +97,33 @@ python -m ytfactory branding                # regenerate channel art
 - `voice.kokoro_voice`: Zib's voice (`am_michael` by default; run `python -m ytfactory voices` to hear the options).
 - `images.backend`: `sdcpp` (default), `comfyui` (if you prefer ComfyUI; set the checkpoint name), or `none`
   (no AI images: built-in animated art and Wikimedia images only; renders right away).
-- `images.style`: the style prompt added to every illustration, which keeps the look consistent.
+- `images.style`: the style prompt added to every AI image, which keeps the look consistent.
+- `stock.*`: your Pexels/Pixabay keys, whether to use video clips, and whether Claude picks the footage (`vision_pick`).
+- `images.max_ai_images`: the cap on AI images per video (default 25).
 - `claude.model`: leave empty for the default, or `opus` / `sonnet`.
 - `video.workers`: rendering processes (auto = half your CPU threads).
 - `video.burn_captions`: burn subtitles into the video (they're always exported as `.srt`).
 - Music: drop `.mp3` files from the YouTube Audio Library (free, no attribution needed for most) into `assets/music/`.
 
-### Image generation notes for the RX 6700 XT
+### Where the pictures come from
+1. **b-roll shots** (most of the video): the script gives each shot a 2-4 word stock search ("mantis shrimp", "coral reef
+   underwater"). The app searches Pexels and Pixabay (video clips first, then photos), then Openverse, Wikimedia and NASA.
+   It shows Claude a numbered grid of the options, and Claude picks the one that matches the narration, rejecting
+   off-topic, watermarked or text-covered images. If nothing fits, the shot uses an AI image or an animated caption.
+   **Get the two free keys** (`python -m ytfactory keys`); without them only the keyless sources are used and there's
+   no stock video.
+2. **archive shots**: real historical images from Wikimedia, NASA and Openverse.
+3. **AI images** are only used for things that can't be photographed, capped at `images.max_ai_images`.
+   In the dashboard, 🎲 swaps a shot for different footage and ✎ changes what to search for.
+
+### AI image notes for the RX 6700 XT
 - stable-diffusion.cpp's Vulkan build needs no ROCm/ZLUDA; it works on Windows with the normal AMD driver.
-- The default is SDXL base + the 8-step **SDXL-Lightning** LoRA (fast; expect roughly 10-30 s per image on 12 GB).
-  The new shot-based edit uses about 80-150 new images per video (capped by `images.max_images`; extra shots reuse
-  earlier images as closeups), so expect roughly 30-60 minutes of image generation. Lower `max_images` for speed.
-- If you see black or broken images, change `cfg`, `steps` or `sampler` in `config.yaml`, or swap the model for any
-  SDXL checkpoint you like (put the `.safetensors` in `models/` and set `images.sdcpp.model`; set `lora: ""` for
-  non-base checkpoints). Run `python -m ytfactory check --test-image` to try settings quickly.
+- The default model is **FLUX.1-schnell** (4 steps, Apache-2.0). It is far better than SDXL at following prompts and
+  drawing realistic anatomy. The text encoders run on the CPU (your 32 GB RAM) so the 12 GB of VRAM is free for the model.
+  Expect very roughly 20-60 s per image; with a cap of 25 AI images per video, that's about 10-25 minutes.
+- Test it with `python -m ytfactory check --test-image` and look at `test_image.png`. If it fails or looks wrong, set
+  `images.backend: none`: videos then use real footage only, which looks good on its own.
+- `python -m ytfactory setup --images sdxl` with `images.sdcpp.preset: sdxl` is the older, lighter option.
 - Prefer ComfyUI? Install ComfyUI (DirectML or ZLUDA build for AMD), start it, and set `images.backend: comfyui`.
 
 ## 5. Honest advice for the channel

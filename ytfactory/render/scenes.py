@@ -31,7 +31,8 @@ class SceneContext:
     channel_name: str = "Probe Into It"
     burn_captions: bool = False
     image2: Image.Image | None = None             # right-hand image of a split shot
-    shots: list = field(default_factory=list)     # [{spec, start, image, image2}] for multi-shot scenes
+    shots: list = field(default_factory=list)     # [{spec, start, image, image2, video}] for multi-shot scenes
+    video: str | None = None                      # stock clip, already normalised to output size/fps
 
 
 class Scene:
@@ -586,6 +587,67 @@ class SplitScene(Scene):
         return f
 
 
+class VideoScene(Scene):
+    """Plays a (pre-normalised) stock clip, with a gentle push-in and the usual overlays."""
+
+    def prepare(self):
+        import subprocess
+
+        from ..tts import ffmpeg_exe
+
+        self._sp = subprocess
+        self._ff = ffmpeg_exe()
+        self._proc = None
+        self._next = 0
+        self._last = None
+
+    def _open(self, frame_index: int):
+        if self._proc is not None:
+            self._proc.kill()
+        W, H = self.ctx.size
+        self._proc = self._sp.Popen(
+            [self._ff, "-v", "error", "-ss", f"{frame_index / self.ctx.fps:.3f}", "-i", self.ctx.video,
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(self.ctx.fps), "-"],
+            stdout=self._sp.PIPE, stderr=self._sp.DEVNULL)
+        self._next = frame_index
+
+    def _read(self, idx: int) -> Image.Image | None:
+        W, H = self.ctx.size
+        if self._proc is None or idx < self._next or idx > self._next + 90:
+            self._open(idx)
+        size = W * H * 3
+        while self._next <= idx:
+            buf = self._proc.stdout.read(size)
+            if len(buf) < size:  # clip ended: hold the last frame
+                return self._last
+            self._next += 1
+            if self._next > idx:
+                self._last = Image.frombytes("RGB", (W, H), buf)
+        return self._last
+
+    def render(self, t):
+        f = self._read(int(t * self.ctx.fps))
+        if f is None:
+            f = self.ctx.image.resize(self.ctx.size) if self.ctx.image is not None else self.backdrop.frame(t)
+        z = 1 + 0.05 * ease_in_out_sine(t / max(0.1, self.ctx.duration))
+        w, h = self.W / z, self.H / z
+        f = f.resize(self.ctx.size, Image.BILINEAR, box=((self.W - w) / 2, (self.H - h) / 2, (self.W + w) / 2, (self.H + h) / 2))
+        return apply_vignette(f, 0.25)
+
+    def __del__(self):
+        if getattr(self, "_proc", None) is not None:
+            self._proc.kill()
+
+
+class BrollScene(Scene):
+    """Real footage: a video clip if we have one, else the photo with a Ken Burns move."""
+
+    def __new__(cls, spec, ctx):
+        if ctx.video:
+            return VideoScene(spec, ctx)
+        return IllustrationScene(spec, ctx)
+
+
 class SequenceScene(Scene):
     """A paragraph of narration cut into several shots, with punchy cuts and FX."""
     corner_mascot = False
@@ -605,7 +667,7 @@ class SequenceScene(Scene):
                 env = ctx.envelope[a:]
             sub_ctx = SceneContext(
                 size=ctx.size, fps=ctx.fps, duration=dur, theme=ctx.theme, seed=ctx.seed * 13 + j,
-                image=sh.get("image"), image2=sh.get("image2"), envelope=env,
+                image=sh.get("image"), image2=sh.get("image2"), video=sh.get("video"), envelope=env,
                 sentences=[{**x, "start": x["start"] - st, "end": x["end"] - st} for x in ctx.sentences if x["end"] > st and x["start"] < en],
                 chapter_number=ctx.chapter_number, is_last=ctx.is_last and j == len(ctx.shots) - 1,
                 channel_name=ctx.channel_name, burn_captions=False,
@@ -661,6 +723,7 @@ SCENES = {
     "quote": QuoteScene,
     "mascot": MascotScene,
     "closeup": CloseupScene,
+    "broll": BrollScene,
     "kinetic": KineticScene,
     "split": SplitScene,
 }

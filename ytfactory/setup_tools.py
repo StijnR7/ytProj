@@ -19,6 +19,14 @@ SDXL_FILES = {
 }
 
 
+FLUX_FILES = {
+    "models/flux/flux1-schnell-q4_0.gguf": HF + "leejet/FLUX.1-schnell-gguf/resolve/main/flux1-schnell-q4_0.gguf",
+    "models/flux/ae.safetensors": HF + "black-forest-labs/FLUX.1-schnell/resolve/main/ae.safetensors",
+    "models/flux/clip_l.safetensors": HF + "comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors",
+    "models/flux/t5xxl_fp16.safetensors": HF + "comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp16.safetensors",
+}
+
+
 def download(url: str, dest: Path, log=print) -> None:
     if dest.exists() and dest.stat().st_size > 0:
         log(f"  already have {dest.name}")
@@ -72,17 +80,33 @@ def setup_sdcpp(log=print) -> None:
     log(f"  stable-diffusion.cpp extracted to {out} ({rel.get('tag_name')})")
 
 
+def _download_set(files: dict, log=print) -> None:
+    for rel, url in files.items():
+        try:
+            download(url, resolve(rel), log)
+        except Exception as e:  # noqa: BLE001
+            page = url.split("/resolve/")[0]
+            log(f"  !! could not download {rel}: {e}\n     Download it manually from {page} and save it as {rel}")
+
+
 def setup_sdxl(log=print) -> None:
-    for rel, url in SDXL_FILES.items():
-        download(url, resolve(rel), log)
+    _download_set(SDXL_FILES, log)
 
 
-def run_setup(images: bool = False, log=print) -> None:
+def setup_flux(log=print) -> None:
+    _download_set(FLUX_FILES, log)
+
+
+def run_setup(images: str | None = None, log=print) -> None:
     log("== Voice (Kokoro, ~120 MB) ==")
     setup_voice(log)
     if images:
         log("== stable-diffusion.cpp (Vulkan) ==")
         setup_sdcpp(log)
-        log("== SDXL model + Lightning LoRA (~7.5 GB) ==")
-        setup_sdxl(log)
-    log("Setup complete. Next: python -m ytfactory check")
+        if images == "sdxl":
+            log("== SDXL model + Lightning LoRA (~7.5 GB) ==")
+            setup_sdxl(log)
+        else:
+            log("== FLUX.1-schnell (~17 GB: model, VAE and text encoders) ==")
+            setup_flux(log)
+    log("Setup complete. Next: python -m ytfactory keys   (free stock footage keys), then: python -m ytfactory check")

@@ -19,7 +19,7 @@ from .audio import build_mix, mouth_envelope
 from .common import ORANGE, ease_in_out_sine
 from .scenes import SceneContext, make_scene
 
-RENDER_VERSION = "3"
+RENDER_VERSION = "4"
 
 _IMG_CACHE: dict = {}
 
@@ -53,7 +53,7 @@ def previous_image(project: Project, scenes: list[dict], scene: int, shot: int) 
     i, j = scene, shot
     while i >= 0:
         while j >= 0:
-            if scenes[i]["shots"][j]["visual"]["type"] in ("illustration", "archive", "split"):
+            if scenes[i]["shots"][j]["visual"]["type"] in ("broll", "illustration", "archive", "split"):
                 p = shot_image(project, i, j) or shot_image(project, i, j, "a")
                 if p:
                     return p
@@ -68,7 +68,7 @@ def shot_images(project: Project, scenes: list[dict], idx: int) -> list[tuple[Pa
     out = []
     for j, sh in enumerate(scenes[idx]["shots"]):
         t = sh["visual"]["type"]
-        if t in ("illustration", "archive"):
+        if t in ("broll", "illustration", "archive"):
             out.append((shot_image(project, idx, j), None))
         elif t == "split":
             out.append((shot_image(project, idx, j, "a"), shot_image(project, idx, j, "b")))
@@ -77,6 +77,11 @@ def shot_images(project: Project, scenes: list[dict], idx: int) -> list[tuple[Pa
         else:
             out.append((None, None))
     return out
+
+
+def shot_video(project: Project, scene: int, shot: int) -> Path | None:
+    p = project.path("images", f"s{scene:03d}_{shot:02d}.mp4")
+    return p if p.exists() else None
 
 
 def build_context(project: Project, scenes: list[dict], timeline: dict, idx: int) -> SceneContext:
@@ -94,7 +99,9 @@ def build_context(project: Project, scenes: list[dict], timeline: dict, idx: int
     starts = tl.get("shots") or [0.0]
     shots = []
     for j, (sh, (im1, im2)) in enumerate(zip(scenes[idx]["shots"], shot_images(project, scenes, idx))):
-        shots.append({"spec": sh, "start": starts[j] if j < len(starts) else starts[-1], "image": _load(im1), "image2": _load(im2)})
+        vid = shot_video(project, idx, j) if sh["visual"]["type"] in ("broll", "archive") else None
+        shots.append({"spec": sh, "start": starts[j] if j < len(starts) else starts[-1], "image": _load(im1), "image2": _load(im2),
+                      "video": str(vid) if vid else None})
     return SceneContext(
         size=(v["width"], v["height"]), fps=fps, duration=frames / fps, theme=project.theme, seed=idx * 7 + 3,
         image=shots[0]["image"] if shots else None, envelope=env, sentences=tl.get("sentences", []),
@@ -111,8 +118,8 @@ def scene_hash(project: Project, scenes: list[dict], timeline: dict, idx: int) -
             continue
         parts.append(json.dumps({k: scenes[j].get(k) for k in ("shots", "mascot")}, sort_keys=True))
         parts.append(json.dumps(timeline["scenes"][j], sort_keys=True))
-        for pair in shot_images(project, scenes, j):
-            for im in pair:
+        for k, pair in enumerate(shot_images(project, scenes, j)):
+            for im in (*pair, shot_video(project, j, k)):
                 if im is not None:
                     parts.append(f"{im.name}:{im.stat().st_mtime_ns}")
         w = project.path("audio", f"scene_{j:03d}.wav")

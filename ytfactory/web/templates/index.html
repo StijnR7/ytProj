@@ -122,13 +122,13 @@ function render() {
   let body = '';
   if (tab === 'storyboard') {
     const nShots = P.scenes.reduce((a, s) => a + s.shots.length, 0);
-    body = P.scenes.length ? `<div class="small" style="margin-bottom:10px">${P.scenes.length} paragraphs · ${nShots} shots · ${P.words} words${P.length ? ' · ' + fmt(P.length) + ' · a cut every ' + (P.length / nShots).toFixed(1) + 's' : ''}. 🎲 re-rolls an image, ✎ gives a shot a new picture.</div>` +
+    body = P.scenes.length ? `<div class="small" style="margin-bottom:10px">${P.scenes.length} paragraphs · ${nShots} shots · ${P.words} words${P.length ? ' · ' + fmt(P.length) + ' · a cut every ' + (P.length / nShots).toFixed(1) + 's' : ''}. 🎲 swaps in different footage/image, ✎ changes what to search for.</div>` +
       P.scenes.map(s => `<div class="para"><div class="t">#${s.index} ${s.start!=null?fmt(s.start):''} · ${esc(s.chapter)}${s.mascot!=='none'?' · Zib: '+esc(s.mascot):''}</div>
         <div class="shots">${s.shots.map((sh, j) => `<div class="shot"><img src="${sh.preview ? f(sh.preview) : (sh.image ? f(sh.image) : '')}" alt="">
           <div class="b"><div class="t">${sh.start!=null?fmt(sh.start):''} · ${esc(sh.visual.type)}${sh.fx!=='none'?' · '+sh.fx:''}</div>
           <div class="n">${esc(sh.say)}</div>
-          <div class="v">${esc(sh.visual.prompt || sh.visual.query || sh.visual.text || sh.visual.line || sh.visual.label || sh.visual.heading || sh.visual.focus || '')}</div>
-          <div class="row" style="margin-top:6px">${['illustration','archive','split'].includes(sh.visual.type) ? `<button class="ghost mini" data-needs-idle onclick="reroll(${s.index},${j})">🎲</button>` : ''}
+          <div class="v">${esc(sh.visual.query || sh.visual.prompt || sh.visual.text || sh.visual.line || sh.visual.label || sh.visual.heading || sh.visual.focus || '')}</div>
+          <div class="row" style="margin-top:6px">${['broll','illustration','archive','split'].includes(sh.visual.type) ? `<button class="ghost mini" data-needs-idle onclick="reroll(${s.index},${j})">🎲</button>` : ''}
           <button class="ghost mini" data-needs-idle onclick="reprompt(${s.index},${j})">✎</button></div></div></div>`).join('')}</div></div>`).join('')
       : '<div class="empty">No script yet - run the pipeline.</div>';
   } else if (tab === 'script') {
@@ -170,7 +170,7 @@ async function fromIdea(n) { const r = await api('/api/projects', {idea:n}); ope
 async function genIdeas() { const r = await api('/api/ideas/generate', {n:12}); if (!r.ok) alert('Another job is running.'); refresh(); }
 async function branding() { await api('/api/branding', {}); setTimeout(refresh, 4000); }
 async function reroll(i, j) { await api(`/api/projects/${cur}/scene/${i}/shot/${j}/reroll`, {}); refresh(); }
-async function reprompt(i, j) { const sh = P.scenes.find(x => x.index === i).shots[j]; const p = prompt('New image prompt for this shot:', sh.visual.prompt || sh.say); if (p) { await api(`/api/projects/${cur}/scene/${i}/shot/${j}/reroll`, {prompt:p}); refresh(); } }
+async function reprompt(i, j) { const sh = P.scenes.find(x => x.index === i).shots[j]; const p = prompt(sh.visual.type === 'illustration' ? 'New AI image prompt:' : 'New footage search (2-4 words, e.g. "coral reef underwater"):', sh.visual.query || sh.visual.prompt || sh.say); if (p) { await api(`/api/projects/${cur}/scene/${i}/shot/${j}/reroll`, {prompt:p}); refresh(); } }
 async function saveScript() {
   const r = await fetch(`/api/projects/${cur}/script`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({script:$('#scriptbox').value})}).then(r=>r.json());
   $('#savemsg').textContent = r.error ? 'Error: ' + r.error : `Saved (${r.words} words). Now click ② or re-run from "voice".`;

@@ -31,13 +31,21 @@ def cmd_check(args) -> None:
         row("ffmpeg", True)
     except Exception:  # noqa: BLE001
         row("ffmpeg", False, "pip install imageio-ffmpeg")
+    from .stock import key as stock_key
+    row("Pexels key (stock video + photos)", stock_key("pexels_key"), "python -m ytfactory keys")
+    row("Pixabay key (stock video + photos)", stock_key("pixabay_key"), "python -m ytfactory keys")
     eng = cfg["voice"]["engine"]
     row(f"voice engine '{eng}'", eng != "kokoro" or KOKORO_MODEL.exists(), "python -m ytfactory setup")
     be = cfg["images"]["backend"]
     if be == "sdcpp":
         from .config import resolve
+        sd = cfg["images"]["sdcpp"]
         row("stable-diffusion.cpp", find_sd_exe(), "python -m ytfactory setup --images")
-        row("SDXL model", resolve(cfg["images"]["sdcpp"]["model"]).exists(), "python -m ytfactory setup --images")
+        if sd.get("preset", "flux_schnell") == "flux_schnell":
+            for k in ("diffusion_model", "vae", "clip_l", "t5xxl"):
+                row(f"FLUX {k}", resolve(sd["flux"][k]).exists(), "python -m ytfactory setup --images flux")
+        else:
+            row("SDXL model", resolve(sd["model"]).exists(), "python -m ytfactory setup --images sdxl")
     elif be == "comfyui":
         import requests
         try:
@@ -53,7 +61,7 @@ def cmd_check(args) -> None:
         from .images import generate_image
         out = Path("test_image.png")
         print("  generating a test image...")
-        generate_image("a tiny friendly robot probe floating above a glowing alien jungle", out, seed=42)
+        generate_image("a mantis shrimp on a coral reef, vivid colors, underwater light rays", out, seed=42)
         print(f"  -> {out.resolve()}")
     print("All good!" if ok else "Fix the items marked !! (see README).")
 
@@ -62,6 +70,24 @@ def cmd_setup(args) -> None:
     from .setup_tools import run_setup
 
     run_setup(images=args.images)
+
+
+def cmd_keys(args) -> None:
+    import re
+
+    from .config import ROOT
+
+    print("Free stock footage keys (no credit card):")
+    print("  Pexels:  https://www.pexels.com/api/  -> 'Get started', copy your API key")
+    print("  Pixabay: https://pixabay.com/api/docs/ -> log in, your key is shown under 'Parameters'")
+    path = ROOT / "config.yaml"
+    text = path.read_text(encoding="utf-8")
+    for name in ("pexels_key", "pixabay_key"):
+        val = input(f"{name} (Enter to keep current): ").strip()
+        if val:
+            text = re.sub(rf'^(\s*{name}:).*$', lambda m: f'{m.group(1)} "{val}"', text, flags=re.M)
+    path.write_text(text, encoding="utf-8")
+    print("Saved to config.yaml")
 
 
 def cmd_ideas(args) -> None:
@@ -140,9 +166,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="ytfactory", description="Probe Into It - free local YouTube documentary factory")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("setup", help="download the voice model (and image tools with --images)")
-    s.add_argument("--images", action="store_true", help="also download stable-diffusion.cpp + SDXL (~7.5 GB)")
+    s = sub.add_parser("setup", help="download the voice model (and AI image tools with --images)")
+    s.add_argument("--images", nargs="?", const="flux", choices=["flux", "sdxl"],
+                   help="also download stable-diffusion.cpp + FLUX.1-schnell (default, ~17 GB) or SDXL (~7.5 GB)")
     s.set_defaults(fn=cmd_setup)
+
+    sub.add_parser("keys", help="save your free Pexels / Pixabay API keys").set_defaults(fn=cmd_keys)
 
     s = sub.add_parser("check", help="verify everything is installed")
     s.add_argument("--test-image", action="store_true")

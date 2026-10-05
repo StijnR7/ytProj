@@ -224,60 +224,136 @@ def shot_image_path(p: Project, scene: int, shot: int, side: str = "") -> Path |
     return None
 
 
+def _shot_durations(p: Project) -> dict[tuple[int, int], float]:
+    tl = p.read_json("timeline.json") or {"scenes": []}
+    fps = load_config()["video"]["fps"]
+    out = {}
+    for sc in tl["scenes"]:
+        starts = sc.get("shots") or [0.0]
+        end = sc["frames"] / fps
+        for j, st in enumerate(starts):
+            out[(sc["index"], j)] = max(0.5, (starts[j + 1] if j + 1 < len(starts) else end) - st)
+    return out
+
+
 def stage_visuals(p: Project, log) -> None:
-    cfg = load_config()["images"]
-    script = p.read_json("script.json")
+    from . import stock
+
+    icfg = load_config()["images"]
+    scfg = load_config().get("stock", {})
     idir = p.path("images")
     idir.mkdir(exist_ok=True)
     credits = p.read_json("credits.json", {}) or {}
-    budget = int(cfg.get("max_images", 150))
+    used = {c.get("source_id") for c in credits.values() if c.get("source_id")}
+    durs = _shot_durations(p)
+    ai_budget = int(icfg.get("max_ai_images", 25))
+    ai_used = sum(1 for f in idir.glob("s*_*.png"))
+    fps = load_config()["video"]["fps"]
 
-    # enforce the image budget: turn surplus illustrations into free closeups of the previous image
-    used, changed, idx = 0, False, 0
-    for ch in script["chapters"]:
-        for sc in ch["scenes"]:
-            for j, sh in enumerate(sc["shots"]):
-                vt = sh["visual"]["type"]
-                if vt in IMAGE_TYPES:
-                    cost = 2 if vt == "split" else 1
-                    if used + cost > budget and vt == "illustration" and used > 0:
-                        sh["visual"] = {"type": "closeup", "focus": ("left", "right", "center", "top")[j % 4], "camera": "zoom_in"}
-                        changed = True
-                    else:
-                        used += cost
-            idx += 1
-    if changed:
-        p.write_json("script.json", script)
-        log(f"  image budget ({budget}) reached - extra shots became closeups")
+    def have(i, j, side=""):
+        return shot_image_path(p, i, j, side) is not None or p.path("images", f"s{i:03d}_{j:02d}{side}.mp4").exists()
 
-    jobs = []  # (scene, shot, side, visual, prompt)
+    def try_ai(i, j, side, prompt, v) -> bool:
+        nonlocal ai_used
+        if icfg["backend"] == "none" or ai_used >= ai_budget:
+            return False
+        seed = 1000 + i * 37 + j * 7 + (13 if side == "b" else 0) + 7919 * int(v.get("seed_bump", 0))
+        try:
+            if generate_image(prompt, idir / f"s{i:03d}_{j:02d}{side}.png", seed=seed):
+                ai_used += 1
+                return True
+        except ImageGenError as e:
+            log(f"    AI image failed ({str(e).splitlines()[0]}) - continuing without it")
+        return False
+
+    # ---- collect the work
+    stock_jobs, ai_jobs = [], []
     for s in p.scenes():
         for j, sh in enumerate(s["shots"]):
-            v = sh["visual"]
-            if v["type"] in ("illustration", "archive"):
-                jobs.append((s["index"], j, "", v, v.get("prompt") or sh["say"]))
+            v, i = sh["visual"], s["index"]
+            if v["type"] in ("broll", "archive") and not have(i, j):
+                stock_jobs.append({"id": f"{i}:{j}", "i": i, "j": j, "side": "", "v": v, "say": sh["say"],
+                                   "kind": v["type"], "query": v.get("query") or v.get("prompt", "")[:60]})
             elif v["type"] == "split":
-                jobs.append((s["index"], j, "a", v, v["left"]["prompt"]))
-                jobs.append((s["index"], j, "b", v, v["right"]["prompt"]))
-    log(f"  {len(jobs)} images needed (AI backend: {cfg['backend']}, Wikimedia: {cfg['wikimedia']})")
-    for k, (i, j, side, v, prompt) in enumerate(jobs, 1):
-        if shot_image_path(p, i, j, side):
-            continue
-        key = f"{i}:{j}{side}"
-        if v["type"] == "archive" and cfg["wikimedia"]:
-            c = fetch_wikimedia(v.get("query", ""), idir / f"s{i:03d}_{j:02d}.jpg")
-            if c:
-                credits[key] = c
-                p.write_json("credits.json", credits)
-                log(f"  [{k}/{len(jobs)}] archive: {c['title']}")
-                continue
-            log(f"  [{k}/{len(jobs)}] no free archive image for '{v.get('query')}', illustrating instead")
+                for side, key in (("a", "left"), ("b", "right")):
+                    if not have(i, j, side):
+                        sd = v[key]
+                        stock_jobs.append({"id": f"{i}:{j}{side}", "i": i, "j": j, "side": side, "v": v, "say": sd.get("label") or sh["say"],
+                                           "kind": "split", "query": sd.get("query") or sd.get("label") or sd["prompt"][:60], "prompt": sd["prompt"]})
+            elif v["type"] == "illustration" and not have(i, j):
+                ai_jobs.append((i, j, v, sh["say"]))
+    log(f"  {len(stock_jobs)} shots from stock/archive, {len(ai_jobs)} AI illustrations "
+        f"(AI: {icfg['backend']}, cap {ai_budget}; Pexels {'on' if stock.key('pexels_key') else 'off'}, Pixabay {'on' if stock.key('pixabay_key') else 'off'})")
+
+    # ---- stock: search, let Claude pick, download
+    n_c = int(scfg.get("candidates", 6))
+    batch = []
+
+    def flush():
+        if not batch:
+            return
+        if scfg.get("vision_pick", True):
+            picks = stock.claude_pick([{"id": b["id"], "say": b["say"], "query": b["query"], "cands": b["cands"]} for b in batch], log)
+        else:
+            picks = {b["id"]: 0 for b in batch}
+        for b in batch:
+            k = picks.get(b["id"], 0)
+            ok = False
+            if k >= 0:
+                order = [k] + [x for x in range(len(b["cands"])) if x != k] if not scfg.get("vision_pick", True) else [k]
+                for idx in order:
+                    c = b["cands"][idx]
+                    base = idir / f"s{b['i']:03d}_{b['j']:02d}{b['side']}"
+                    if c["kind"] == "video":
+                        ok = stock.download_clip(c["url"], base.with_suffix(".mp4"), durs.get((b["i"], b["j"]), 4.0) + 0.3, fps=fps)
+                    else:
+                        ok = stock.download_image(c["url"], base.with_suffix(".jpg"))
+                    if ok:
+                        credits[b["id"]] = {**c["credit"], "source_id": c["id"]}
+                        used.add(c["id"])
+                        log(f"    shot {b['id']}: {c['kind']} - {c['credit']['title'][:60]}")
+                        break
+            if not ok:
+                prompt = b.get("prompt") or b["v"].get("prompt") or b["say"]
+                if try_ai(b["i"], b["j"], b["side"], prompt, b["v"]):
+                    log(f"    shot {b['id']}: no good stock match -> AI illustration")
+                else:
+                    log(f"    shot {b['id']}: no good match -> animated caption")
+        p.write_json("credits.json", credits)
+        batch.clear()
+
+    for k, job in enumerate(stock_jobs, 1):
+        exclude = used | set(job["v"].get("reject", []))
         try:
-            seed = 1000 + i * 37 + j * 7 + (13 if side == "b" else 0) + 7919 * int(v.get("seed_bump", 0))
-            if generate_image(prompt, idir / f"s{i:03d}_{j:02d}{side}.png", seed=seed):
-                log(f"  [{k}/{len(jobs)}] illustrated scene {i} shot {j}{side}")
-        except ImageGenError as e:
-            raise ImageGenError(f"{e}\n\nTip: set images.backend to 'none' in config.yaml to render with built-in art instead.") from e
+            cands = stock.candidates(job["query"], "archive" if job["kind"] == "archive" else "broll",
+                                     job["v"].get("prefer", "any") if job["kind"] == "broll" else "photo", n_c, exclude, log)
+        except Exception as e:  # noqa: BLE001
+            log(f"    search failed for '{job['query']}': {e}")
+            cands = []
+        if not cands:
+            batch.append({**job, "cands": []})
+        else:
+            batch.append({**job, "cands": cands})
+        if len(batch) >= 6:
+            log(f"  [{k}/{len(stock_jobs)}] picking the best footage...")
+            flush()
+    flush()
+
+    # ---- AI illustrations (only for things no camera could capture)
+    for k, (i, j, v, say) in enumerate(ai_jobs, 1):
+        if try_ai(i, j, "", v.get("prompt") or say, v):
+            log(f"  [{k}/{len(ai_jobs)}] AI illustration for shot {i}:{j}")
+            continue
+        # no AI available or over budget: try a real photo instead
+        try:
+            cands = stock.candidates(v.get("query") or v.get("prompt", "")[:60], "broll", "photo", 1, used, log)
+        except Exception:  # noqa: BLE001
+            cands = []
+        if cands and stock.download_image(cands[0]["url"], idir / f"s{i:03d}_{j:02d}.jpg"):
+            credits[f"{i}:{j}"] = {**cands[0]["credit"], "source_id": cands[0]["id"]}
+            used.add(cands[0]["id"])
+    p.write_json("credits.json", credits)
+    log(f"  visuals done ({ai_used} AI images used)")
 
 
 def stage_storyboard(p: Project, log) -> None:
@@ -328,6 +404,16 @@ def stage_thumbnails(p: Project, log) -> None:
                 jp = p.path("images", f"thumb_bg_{n}.jpg")
                 if jp.exists() or fetch_wikimedia(c["archive_query"], jp):
                     bg = Image.open(jp).convert("RGB")
+            if bg is None and c.get("query"):
+                from . import stock
+
+                jp = p.path("images", f"thumb_bg_{n}.jpg")
+                try:
+                    cands = stock.candidates(c["query"], "broll", "photo", 1, set(), log)
+                except Exception:  # noqa: BLE001
+                    cands = []
+                if jp.exists() or (cands and stock.download_image(cands[0]["url"], jp)):
+                    bg = Image.open(jp).convert("RGB")
             if bg is None:
                 try:
                     if generate_image(c.get("prompt", meta["best_title"]), bgp, seed=77 + n):
@@ -336,7 +422,7 @@ def stage_thumbnails(p: Project, log) -> None:
                     log(f"  thumbnail bg generation failed ({e}); using built-in art")
             if bg is None:
                 # reuse the most striking scene image if any
-                imgs = sorted(p.path("images").glob("s[0-9]*_*.*"))
+                imgs = sorted(f for f in p.path("images").glob("s[0-9]*_*.*") if f.suffix in (".jpg", ".png"))
                 if imgs:
                     bg = Image.open(imgs[min(len(imgs) - 1, n * 3)]).convert("RGB")
         paths.append(make_thumbnail(c, bg, p.theme, out_dir / f"thumbnail_{n}.jpg"))

@@ -22,8 +22,8 @@ STAGES = [
     "package",
 ]
 
-VISUAL_TYPES = {"illustration", "archive", "closeup", "kinetic", "split", "title", "stat", "timeline", "list", "comparison", "quote", "mascot"}
-IMAGE_TYPES = {"illustration", "archive", "split"}
+VISUAL_TYPES = {"broll", "illustration", "archive", "closeup", "kinetic", "split", "title", "stat", "timeline", "list", "comparison", "quote", "mascot"}
+IMAGE_TYPES = {"broll", "illustration", "archive", "split"}
 MASCOT_EXPRESSIONS = {"none", "happy", "surprised", "thinking", "excited", "worried", "pointing"}
 THEMES = {"space", "history", "animals", "hypotheticals", "brand"}
 
@@ -144,7 +144,14 @@ class Project:
 # ----------------------------------------------------------------- validation
 
 def word_count(script: dict) -> int:
-    return sum(len(s.get("narration", "").split()) for c in script.get("chapters", []) for s in c.get("scenes", []))
+    n = 0
+    for c in script.get("chapters", []):
+        for s in c.get("scenes", []):
+            if isinstance(s.get("shots"), list) and s["shots"]:
+                n += sum(len(str(sh.get("say", "")).split()) for sh in s["shots"] if isinstance(sh, dict))
+            else:
+                n += len(str(s.get("narration", "")).split())
+    return n
 
 
 def _bad_visual(v) -> bool:
@@ -182,7 +189,11 @@ def normalize_visual(v: dict, say: str, chapter_title: str, k: int = 0) -> dict:
     t = v["type"]
     if v.get("theme") not in THEMES:
         v.pop("theme", None)
-    if t in ("illustration", "archive"):
+    if t == "broll":
+        v["query"] = str(v.get("query") or v.get("prompt") or say)[:80]
+        if v.get("prefer") not in ("video", "photo", "any"):
+            v["prefer"] = "any"
+    if t in ("broll", "illustration", "archive"):
         v.setdefault("prompt", say[:200] or chapter_title)
         if v.get("camera") not in CAMERAS:
             v["camera"] = CAMERAS[k % len(CAMERAS)]

@@ -49,6 +49,7 @@ def ask(
     prompt: str,
     *,
     allow_web: bool = False,
+    allow_read: bool = False,
     workdir: Path | None = None,
     log: Callable[[str], None] = print,
 ) -> str:
@@ -62,8 +63,9 @@ def ask(
     args = [exe, "-p", "--output-format", "json", "--system-prompt", SYSTEM_PROMPT]
     if cfg.get("model"):
         args += ["--model", str(cfg["model"])]
-    if allow_web:
-        args += ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch", "WebFetch"]
+    tools = (["WebSearch", "WebFetch"] if allow_web else []) + (["Read"] if allow_read else [])
+    if tools:
+        args += ["--tools", ",".join(tools), "--allowedTools", *tools]
     else:
         args += ["--tools", ""]
 
@@ -139,12 +141,14 @@ def ask_json(
     prompt: str,
     *,
     allow_web: bool = False,
+    allow_read: bool = False,
+    workdir: Path | None = None,
     validate: Callable[[Any], None] | None = None,
     log: Callable[[str], None] = print,
     retries: int = 1,
 ) -> Any:
     """Ask for JSON, parse + validate, and ask Claude to repair once on failure."""
-    text = ask(prompt, allow_web=allow_web, log=log)
+    text = ask(prompt, allow_web=allow_web, allow_read=allow_read, workdir=workdir, log=log)
     for attempt in range(retries + 1):
         try:
             data = extract_json(text)

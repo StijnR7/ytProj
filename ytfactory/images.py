@@ -48,22 +48,37 @@ def gen_sdcpp(prompt: str, out: Path, seed: int, width: int, height: int) -> Non
     exe = find_sd_exe()
     if not exe:
         raise ImageGenError("stable-diffusion.cpp not found in tools/sd. Run: python -m ytfactory setup --images")
-    model = resolve(sd["model"])
-    if not model.exists():
-        raise ImageGenError(f"Image model not found: {model}")
+    preset = sd.get("preset", "flux_schnell")
     p = full_prompt(prompt)
-    if sd.get("lora") and sd.get("lora_dir"):
-        p += f" <lora:{sd['lora']}:1>"
-    args = [
-        str(exe), "-m", str(model), "-p", p, "-n", cfg["negative"],
-        "-W", str(width), "-H", str(height), "--steps", str(sd["steps"]),
-        "--cfg-scale", str(sd["cfg"]), "--sampling-method", str(sd["sampler"]),
-        "-s", str(seed), "-o", str(out),
-    ]
-    if sd.get("vae") and resolve(sd["vae"]).exists():
-        args += ["--vae", str(resolve(sd["vae"]))]
-    if sd.get("lora") and sd.get("lora_dir"):
-        args += ["--lora-model-dir", str(resolve(sd["lora_dir"]))]
+    if preset == "flux_schnell":
+        # FLUX.1-schnell: 4 steps, no CFG, no negative prompt. Text encoders stay on the CPU to leave VRAM for the model.
+        f = sd.get("flux", {})
+        parts = {k: resolve(f.get(k, "")) for k in ("diffusion_model", "vae", "clip_l", "t5xxl")}
+        missing = [k for k, v in parts.items() if not f.get(k) or not v.exists()]
+        if missing:
+            raise ImageGenError(f"FLUX files missing ({', '.join(missing)}). Run: python -m ytfactory setup --images")
+        args = [
+            str(exe), "--diffusion-model", str(parts["diffusion_model"]), "--vae", str(parts["vae"]),
+            "--clip_l", str(parts["clip_l"]), "--t5xxl", str(parts["t5xxl"]), "-p", p,
+            "--cfg-scale", "1.0", "--sampling-method", "euler", "--steps", str(f.get("steps", 4)),
+            "-W", str(width), "-H", str(height), "-s", str(seed), "-o", str(out), "--clip-on-cpu",
+        ]
+    else:
+        model = resolve(sd["model"])
+        if not model.exists():
+            raise ImageGenError(f"Image model not found: {model}")
+        if sd.get("lora") and sd.get("lora_dir"):
+            p += f" <lora:{sd['lora']}:1>"
+        args = [
+            str(exe), "-m", str(model), "-p", p, "-n", cfg["negative"],
+            "-W", str(width), "-H", str(height), "--steps", str(sd["steps"]),
+            "--cfg-scale", str(sd["cfg"]), "--sampling-method", str(sd["sampler"]),
+            "-s", str(seed), "-o", str(out),
+        ]
+        if sd.get("vae") and resolve(sd["vae"]).exists():
+            args += ["--vae", str(resolve(sd["vae"]))]
+        if sd.get("lora") and sd.get("lora_dir"):
+            args += ["--lora-model-dir", str(resolve(sd["lora_dir"]))]
     args += [str(a) for a in sd.get("extra_args", [])]
     proc = subprocess.run(args, capture_output=True, text=True, errors="replace", cwd=str(exe.parent))
     if proc.returncode != 0 or not out.exists():
