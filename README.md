@@ -61,14 +61,29 @@ python -m ytfactory branding                # regenerate channel art
 
 ## 3. What each video contains
 
-- **Script**: about 2,000 words built for retention: a cold-open hook, 5-8 chapters with cliffhangers,
-  a pattern interrupt every 45-90 s, callbacks, an outro with a comment question. If Claude writes it too short
-  it automatically asks for an expansion, so videos land over 10 minutes.
-- **Storyboard**: every 5-18 s scene gets one of: AI illustration (slow pan/zoom), real archive image
-  (framed, with a museum caption), chapter title card, animated stat counter, timeline, list, bar comparison, quote, or
-  Zib talking with a speech bubble. Zib also pops into corners to react, and its mouth moves with the voice.
-- **Audio**: narration, ducked background music, whooshes and pops, loudness-normalised to YouTube's -14 LUFS.
-- **Video**: 1920×1080, 30 fps, H.264, chapter transitions, and a 20 s end-screen with slots for YouTube's end-screen elements.
+- **Script**: about 2,000 words written to a retention playbook (`RETENTION_RULES` in `ytfactory/prompts.py`):
+  - **The hook (first 30 s)**: 0-5 s opens with the single most striking, concrete claim (no greeting, no context);
+    5-15 s delivers what the title promised and raises the stakes; 15-30 s promises a specific payoff and opens a loop
+    that only closes near the end.
+  - A **hook doctor** pass then has Claude write four alternative openings, score them, and rebuild the first chapter
+    around the best one.
+  - After the hook: two or three open loops paid off late, a re-hook roughly every 2 minutes, a pattern interrupt every
+    60-90 s, chapters that end on a tease, no dead air, and no "in conclusion".
+  - If the script comes out too short, Claude is asked to expand it automatically, so videos land over 10 minutes.
+- **Shot-by-shot storyboard**: every paragraph is cut into **shots of 1.5-5 s**, and each shot shows what is being said
+  at that moment. Shot types:
+  - AI illustration (strong pan/zoom with floating particles)
+  - **closeup** (a free extra cut on a detail of the previous image)
+  - **kinetic text** (big words slam onto the screen)
+  - **split-screen VS**
+  - real archive photo, stat counter, timeline, list, bar comparison, quote, chapter title card
+  - Zib with a speech bubble
+
+  Every cut has a small zoom-settle, impact moments get shake, flash or punch effects, and paragraphs are joined by hard
+  cuts, whip-pans, or a brand wipe on chapter titles. Zib reacts in the corner, and its mouth moves with the voice.
+- **Audio**: narration, ducked background music, whooshes, pops and impacts timed to the cuts, loudness-normalised to
+  YouTube's -14 LUFS.
+- **Video**: 1920×1080, 30 fps, H.264, and a 20 s end screen with slots for YouTube's end-screen elements.
 - **Upload package**: 3 thumbnail variants (for *Test & compare*), title plus 4 alternatives, description with
   auto-timestamped **chapters**, sources and image credits, tags, `captions.srt`, pinned comment, and Shorts ideas.
 
@@ -86,7 +101,8 @@ python -m ytfactory branding                # regenerate channel art
 ### Image generation notes for the RX 6700 XT
 - stable-diffusion.cpp's Vulkan build needs no ROCm/ZLUDA; it works on Windows with the normal AMD driver.
 - The default is SDXL base + the 8-step **SDXL-Lightning** LoRA (fast; expect roughly 10-30 s per image on 12 GB).
-  About 30-50 illustrations per video means roughly 10-25 minutes.
+  The new shot-based edit uses about 80-150 new images per video (capped by `images.max_images`; extra shots reuse
+  earlier images as closeups), so expect roughly 30-60 minutes of image generation. Lower `max_images` for speed.
 - If you see black or broken images, change `cfg`, `steps` or `sampler` in `config.yaml`, or swap the model for any
   SDXL checkpoint you like (put the `.safetensors` in `models/` and set `images.sdcpp.model`; set `lora: ""` for
   non-base checkpoints). Run `python -m ytfactory check --test-image` to try settings quickly.
