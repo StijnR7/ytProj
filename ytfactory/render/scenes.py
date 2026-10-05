@@ -42,7 +42,7 @@ class Scene:
         self.theme = get_theme(self.v.get("theme") or ctx.theme)
         self._backdrop = None
         self.prepare()
-        expr = spec.get("mascot", "none")
+        expr = self.spec.get("mascot", "none")
         self.corner = None
         if self.corner_mascot and expr and expr != "none":
             self.corner = ZibActor(int(self.H * 0.22), expr, seed=ctx.seed, envelope=ctx.envelope, fps=ctx.fps, enter_at=0.5)
@@ -98,8 +98,30 @@ class IllustrationScene(Scene):
     ZOOM = 1.16
 
     def prepare(self):
+        self.no_image = self.ctx.image is None
         img = self.ctx.image or Backdrop(self.theme.name, (1344, 768), self.ctx.seed).frame(0)
         self.src = cover(img, self.ctx.size, self.ZOOM)
+        if self.no_image:
+            # No illustration available: become a kinetic-caption scene so the screen is never empty.
+            if self.spec.get("mascot", "none") == "none":
+                self.spec = {**self.spec, "mascot": ("thinking", "happy", "pointing", "surprised")[self.ctx.seed % 4]}
+            self._caps = {}
+
+    def _caption_sprite(self, i: int, text: str) -> Image.Image:
+        if i not in self._caps:
+            fnt, lines, lh = fit_text(text, "heading", int(self.W * 0.66), int(self.H * 0.5), int(self.H * 0.075), 30)
+            spr = Image.new("RGBA", (int(self.W * 0.66) + 40, lh * len(lines) + 40), (0, 0, 0, 0))
+            d = ImageDraw.Draw(spr)
+            words = text.split()
+            key = max(words, key=lambda w: len(w.strip(".,!?;:")) if w[:1].isalnum() else 0) if words else ""
+            for li, line in enumerate(lines):
+                x = (spr.width - fnt.getlength(line)) / 2
+                for w in line.split():
+                    col = self.theme.accent if w == key else self.theme.fg
+                    d.text((x, 20 + li * lh), w, font=fnt, fill=col, stroke_width=3, stroke_fill=(0, 0, 0, 90))
+                    x += fnt.getlength(w + " ")
+            self._caps[i] = drop_shadow(spr, 14, 0.5, (0, 6))
+        return self._caps[i]
 
     def _box(self, t):
         W, H, Z = self.W, self.H, self.ZOOM
@@ -125,7 +147,14 @@ class IllustrationScene(Scene):
 
     def render(self, t):
         f = self.src.resize(self.ctx.size, Image.BILINEAR, box=self._box(t))
-        return apply_vignette(f, 0.35)
+        f = apply_vignette(f, 0.35)
+        if self.no_image and self.ctx.sentences:
+            sents = self.ctx.sentences
+            i = max([k for k, x in enumerate(sents) if x["start"] - 0.1 <= t] or [0])
+            k = ease_out_cubic(progress(t, sents[i]["start"] - 0.1, 0.35))
+            spr = self._caption_sprite(i, sents[i]["text"])
+            paste(f, spr, (self.W * 0.47, self.H * 0.44 + (1 - k) * 25), opacity=k, anchor="c")
+        return f
 
 
 class ArchiveScene(Scene):

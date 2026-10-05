@@ -19,7 +19,7 @@ from .audio import build_mix, mouth_envelope
 from .common import ORANGE, ease_in_out_sine
 from .scenes import SceneContext, make_scene
 
-RENDER_VERSION = "1"
+RENDER_VERSION = "2"
 
 
 def scene_image(project: Project, idx: int) -> Image.Image | None:
